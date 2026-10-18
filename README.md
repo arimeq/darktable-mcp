@@ -35,7 +35,7 @@ Tell Claude what you want — *"make this warmer and more dramatic"*, *"crop to 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yadullahabidi/darktable-mcp.git
+git clone https://github.com/YaddyVirus/darktable-mcp
 cd darktable-mcp
 ```
 
