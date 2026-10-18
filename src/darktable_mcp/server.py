@@ -178,7 +178,7 @@ def apply_adjustments(
     brightness : float
         Global brightness (-100 to +100).
     highlights : float
-        Recover or boost highlights (-100 to +100).
+        Recover (negative) or boost (positive) highlights (-100 to +100).
     shadows : float
         Open shadows (-100 to +100).
     whites : float

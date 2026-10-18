@@ -79,10 +79,10 @@ def _build_shadow_highlight_lut(
     black_point = 255.0 * (-blacks / 200.0)
     lut = (lut - black_point) / (white_point - black_point) * 255.0
 
-    # Highlights: bring down the top end
+    # Highlights: negative recovers (darkens) the top end, positive boosts it
     hl = highlights / 100.0
     mask_hl = lut / 255.0
-    lut = lut - hl * mask_hl ** 2 * 80.0
+    lut = lut + hl * mask_hl ** 2 * 80.0
 
     # Shadows: lift the bottom end
     sh = shadows / 100.0
