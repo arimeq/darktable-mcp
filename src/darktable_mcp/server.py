@@ -8,13 +8,13 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from mcp.server.fastmcp import FastMCP, Image
+from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
 from .xmp_writer import write_xmp
 
-mcp = FastMCP("DarktableMCP")
+mcp = MCPServer("DarktableMCP")
 
 # ---------------------------------------------------------------------------
 # Helpers
