@@ -15,6 +15,34 @@ IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 ALL_EXTENSIONS = RAW_EXTENSIONS | IMG_EXTENSIONS
 
 
+def _read_raw_camera(path: Path) -> dict:
+    """Read camera make/model from the EXIF IFD0 embedded in a RAW file.
+
+    CR3 is ISO-BMFF and keeps IFD0 as a TIFF blob in a ``CMT1`` box; most other
+    RAW formats are TIFF-based and piexif can read them directly.
+    """
+    import struct
+
+    import piexif
+
+    try:
+        if path.suffix.lower() == ".cr3":
+            head = path.read_bytes()[:200_000]
+            i = head.find(b"CMT1")
+            if i < 4:
+                return {}
+            (size,) = struct.unpack(">I", head[i - 4:i])
+            ifd0 = piexif.load(head[i + 4:i - 4 + size])["0th"]
+        else:
+            ifd0 = piexif.load(str(path))["0th"]
+    except Exception:
+        return {}
+    make = ifd0.get(piexif.ImageIFD.Make, b"").decode(errors="replace").strip("\0 ")
+    model = ifd0.get(piexif.ImageIFD.Model, b"").decode(errors="replace").strip("\0 ")
+    camera = model if model.startswith(make) else f"{make} {model}".strip()
+    return {"camera": camera} if camera else {}
+
+
 # ---------------------------------------------------------------------------
 # Colour helpers
 # ---------------------------------------------------------------------------
@@ -204,13 +232,24 @@ class ImageProcessor:
                 with rawpy.imread(str(self.path)) as raw:
                     info["width"] = raw.sizes.width
                     info["height"] = raw.sizes.height
-                    info["camera"] = raw.metadata.camera
-                    info["iso"] = raw.metadata.iso
-                    info["shutter"] = raw.metadata.shutter
-                    info["aperture"] = raw.metadata.aperture
-                    info["focal_len"] = raw.metadata.focal_len
-                    info["timestamp"] = raw.metadata.timestamp
                     info["raw_type"] = raw.raw_type.name
+                    if hasattr(raw, "other"):
+                        # rawpy >= 0.27: shot data moved to .other / .lens
+                        info["iso"] = raw.other.iso_speed
+                        info["shutter"] = raw.other.shutter_speed
+                        info["aperture"] = raw.other.aperture
+                        info["focal_len"] = raw.other.focal_length
+                        info["timestamp"] = str(raw.other.timestamp)
+                        info["lens"] = raw.lens.model or None
+                    else:
+                        info["camera"] = raw.metadata.camera
+                        info["iso"] = raw.metadata.iso
+                        info["shutter"] = raw.metadata.shutter
+                        info["aperture"] = raw.metadata.aperture
+                        info["focal_len"] = raw.metadata.focal_len
+                        info["timestamp"] = raw.metadata.timestamp
+                if "camera" not in info:
+                    info.update(_read_raw_camera(self.path))
             else:
                 with Image.open(self.path) as img:
                     info["width"] = img.width
