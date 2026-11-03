@@ -14,7 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import write_xmp, xmp_sidecar_path
+from .xmp_writer import write_xmp, xmp_sidecar_path, xmp_text
 
 mcp = MCPServer("DarktableMCP")
 
@@ -39,9 +39,26 @@ def _load_or_new(image_path: str) -> tuple[Path, EditState]:
     return path, state
 
 
+def _render(path: Path, state: EditState, max_size: int):
+    """Render RAWs through darktable-cli with the XMP export would use, so what the LLM sees is what gets exported."""
+    if DARKTABLE_CLI and path.suffix.lower() in RAW_EXTENSIONS:
+        from PIL import Image as PILImage
+        with tempfile.TemporaryDirectory() as tmp:
+            # Temp XMP: previewing must not touch the real sidecar (darktable may be running)
+            xmp, text = xmp_sidecar_path(path), xmp_text(state)
+            if text is not None:
+                xmp = Path(tmp, "preview.xmp")
+                xmp.write_text(text, encoding="utf-8")
+            dst = Path(tmp, "preview.jpg")
+            if _export_via_darktable_cli(path, dst, xmp, 90, max_size)["status"] == "ok":
+                with PILImage.open(dst) as img:
+                    return img.convert("RGB")
+    return ImageProcessor(path).process(state, preview_size=max_size)
+
+
 def _quick_preview(path: Path, state: EditState, max_size: int) -> bytes:
     buf = io.BytesIO()
-    ImageProcessor(path).process(state, preview_size=max_size).save(buf, format="JPEG", quality=85, optimize=True)
+    _render(path, state, max_size).save(buf, format="JPEG", quality=85, optimize=True)
     return buf.getvalue()
 
 
@@ -516,9 +533,7 @@ def get_histogram(image_path: str) -> dict:
     except FileNotFoundError as e:
         return {"error": str(e)}
 
-    proc = ImageProcessor(path)
-    img = proc.process(state, preview_size=800)
-    arr = np.array(img, dtype=np.uint8)
+    arr = np.array(_render(path, state, 800), dtype=np.uint8)
 
     def _hist(channel: np.ndarray) -> list[int]:
         counts, _ = np.histogram(channel.ravel(), bins=256, range=(0, 256))

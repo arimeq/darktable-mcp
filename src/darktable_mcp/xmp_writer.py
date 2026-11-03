@@ -76,6 +76,16 @@ def xmp_sidecar_path(src: Path) -> Path:
 
 def write_xmp(edit_state: EditState) -> Optional[Path]:
     """Write the sidecar and return its path, or None if one written by darktable or another tool exists."""
+    text = xmp_text(edit_state)
+    if text is None:
+        return None
+    xmp_path = xmp_sidecar_path(edit_state.source_path)
+    xmp_path.write_text(text, encoding="utf-8")
+    return xmp_path
+
+
+def xmp_text(edit_state: EditState) -> Optional[str]:
+    """Sidecar content, or None if an existing sidecar written by darktable or another tool must be kept."""
     src = edit_state.source_path
     xmp_path = xmp_sidecar_path(src)
     if xmp_path.exists():
@@ -113,5 +123,4 @@ def write_xmp(edit_state: EditState) -> Optional[Path]:
         _ITEM.format(num=i, op=op, ver=ver, params=p, name=name, blendop=b)
         for i, (op, ver, p, name, b) in enumerate(mods)
     )
-    xmp_path.write_text(_HEADER.format(source=src.name, end=len(mods), items=items), encoding="utf-8")
-    return xmp_path
+    return _HEADER.format(source=src.name, end=len(mods), items=items)
