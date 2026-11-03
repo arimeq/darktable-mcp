@@ -14,7 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import write_xmp, xmp_sidecar_path, xmp_text
+from .xmp_writer import foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
 
 mcp = MCPServer("DarktableMCP")
 
@@ -39,27 +39,58 @@ def _load_or_new(image_path: str) -> tuple[Path, EditState]:
     return path, state
 
 
-def _render(path: Path, state: EditState, max_size: int):
-    """Render RAWs through darktable-cli with the XMP export would use, so what the LLM sees is what gets exported."""
-    if DARKTABLE_CLI and path.suffix.lower() in RAW_EXTENSIONS:
-        from PIL import Image as PILImage
-        with tempfile.TemporaryDirectory() as tmp:
-            # Temp XMP: previewing must not touch the real sidecar (darktable may be running)
-            xmp, text = xmp_sidecar_path(path), xmp_text(state)
-            if text is not None:
-                xmp = Path(tmp, "preview.xmp")
-                xmp.write_text(text, encoding="utf-8")
-            dst = Path(tmp, "preview.jpg")
-            if _export_via_darktable_cli(path, dst, xmp, 90, max_size)["status"] == "ok":
-                with PILImage.open(dst) as img:
-                    return img.convert("RGB")
-    return ImageProcessor(path).process(state, preview_size=max_size)
+def _darktable_notes(path: Path, state: EditState) -> dict:
+    """Why a darktable-cli render may not show the stored edits; empty if it shows all of them."""
+    if path.suffix.lower() not in RAW_EXTENSIONS or not DARKTABLE_CLI:
+        return {}
+    if foreign_sidecar(path):
+        return {"foreign_sidecar": str(xmp_sidecar_path(path)),
+                "warning": f"{xmp_sidecar_path(path).name} was written by darktable or another tool and may hold "
+                           "the user's own edits. Preview and export render it as-is: NONE of the edits made "
+                           "with this server's tools are applied, and the sidecar is never overwritten."}
+    if ignored := ignored_by_darktable(state):
+        return {"ignored_by_darktable": ignored,
+                "warning": "These edits are stored but have no effect on the preview or export; "
+                           "changing them further does nothing."}
+    return {}
 
 
-def _quick_preview(path: Path, state: EditState, max_size: int) -> bytes:
+def _render_xmp(path: Path, state: EditState, tmp: str, persist: bool) -> Path:
+    """The XMP darktable-cli renders with: a foreign sidecar as-is, else our edits, written as the real sidecar
+    only when *persist* (previews must not touch it: darktable may be running)."""
+    if foreign_sidecar(path):
+        return xmp_sidecar_path(path)
+    xmp = xmp_sidecar_path(path) if persist else Path(tmp, "edit.xmp")
+    xmp.write_text(xmp_text(state), encoding="utf-8")
+    return xmp
+
+
+def _render(path: Path, state: EditState, max_size: int) -> tuple:
+    """Render with the pipeline export uses, so what the model sees is what gets exported. Returns (image, info)."""
+    if path.suffix.lower() not in RAW_EXTENSIONS:
+        return ImageProcessor(path).process(state, preview_size=max_size), {"rendered_via": "pillow"}
+    if not DARKTABLE_CLI:
+        return ImageProcessor(path).process(state, preview_size=max_size), {
+            "rendered_via": "rawpy", "darktable_cli_failure": {"reason": "darktable-cli not found"},
+            "warning": "Preview and export both use rawpy, but the XMP sidecar will look different in darktable."}
+    from PIL import Image as PILImage
+    with tempfile.TemporaryDirectory() as tmp:
+        dst = Path(tmp, "preview.jpg")
+        result = _export_via_darktable_cli(path, dst, _render_xmp(path, state, tmp, False), 90, max_size)
+        if result["status"] == "ok":
+            with PILImage.open(dst) as img:
+                return img.convert("RGB"), {"rendered_via": "darktable-cli"} | _darktable_notes(path, state)
+    return ImageProcessor(path).process(state, preview_size=max_size), {
+        "rendered_via": "rawpy", "darktable_cli_failure": {k: v for k, v in result.items() if k != "status"},
+        "warning": "darktable-cli could not render this RAW, so this is an approximation with rawpy: "
+                   "it may not match the exported image."}
+
+
+def _quick_preview(path: Path, state: EditState, max_size: int) -> tuple[bytes, dict]:
     buf = io.BytesIO()
-    _render(path, state, max_size).save(buf, format="JPEG", quality=85, optimize=True)
-    return buf.getvalue()
+    img, info = _render(path, state, max_size)
+    img.save(buf, format="JPEG", quality=85, optimize=True)
+    return buf.getvalue(), info
 
 
 def _save_preview(path: Path, img_bytes: bytes, open_file: bool) -> str:
@@ -135,14 +166,14 @@ def get_image_preview(
     except FileNotFoundError as e:
         return [f"Error: {e}"]
 
-    img_bytes = _quick_preview(path, state, max_size)
+    img_bytes, info = _quick_preview(path, state, max_size)
     msg = "Preview rendered (not saved)."
     if save or open_viewer:
         msg = f"Preview saved to: {_save_preview(path, img_bytes, open_viewer)}"
         if open_viewer:
             msg += "\nOpening in your image viewer now..."
 
-    return [msg, Image(data=img_bytes, format="jpeg")]
+    return [f"{msg}\n{json.dumps(info, indent=1)}", Image(data=img_bytes, format="jpeg")]
 
 
 @mcp.tool()
@@ -179,6 +210,8 @@ def apply_adjustments(
 
     Only the parameters you supply are changed; the rest keep their current values.
     Call get_image_preview afterwards to see the result.
+    For RAWs rendered by darktable-cli, parameters marked [not rendered] are stored but have no effect;
+    the result lists them under stored_but_not_rendered.
 
     Parameters
     ----------
@@ -187,9 +220,9 @@ def apply_adjustments(
     black_level : float
         Lift or crush the black point (0.0–0.5).
     highlight_recovery : float
-        Recover blown highlights (0.0–1.0).
+        [not rendered] Recover blown highlights (0.0–1.0).
     shadow_lift : float
-        Open up dark shadows (0.0–1.0).
+        [not rendered] Open up dark shadows (0.0–1.0).
     temperature_kelvin : float
         Light source to neutralise (1667–25000 K): higher = warmer image.  ~5500 K is daylight, ~3200 K is
         tungsten.  Unset = as shot.  darktable color calibration illuminant.
@@ -199,7 +232,7 @@ def apply_adjustments(
     contrast : float
         Global contrast (-100 to +100).
     brightness : float
-        Global brightness (-100 to +100).
+        [not rendered] Global brightness (-100 to +100).
     highlights : float
         Darken (negative) or brighten (positive) highlights (-100 to +100 = ±1.5 EV in the brightest bands).
         darktable tone equalizer.
@@ -207,9 +240,9 @@ def apply_adjustments(
         Lift (positive) or deepen (negative) shadows (-100 to +100 = ±1.5 EV in the darkest bands).
         darktable tone equalizer.
     whites : float
-        White-point adjustment (-100 to +100).
+        [not rendered] White-point adjustment (-100 to +100).
     blacks : float
-        Black-point adjustment (-100 to +100).
+        [not rendered] Black-point adjustment (-100 to +100).
     saturation : float
         Colourfulness at constant brightness (-100 = monochrome, +100 = strong, about +60 % chroma).
         darktable color balance rgb global chroma.
@@ -220,7 +253,7 @@ def apply_adjustments(
     noise_reduction : float
         Noise reduction strength (0 to 100).
     vignette : float
-        Vignette: negative values darken edges, positive lighten (-100 to +100).
+        [not rendered] Vignette: negative values darken edges, positive lighten (-100 to +100).
     clarity : float
         Local contrast / clarity (-100 to +100).
     dehaze_strength : float
@@ -260,7 +293,10 @@ def apply_adjustments(
     state.update(params)
     state.save()
 
-    return {"status": "ok", "applied": list(params.keys()), "edits": state.to_dict()}
+    notes = _darktable_notes(path, state)
+    ignored = params if "foreign_sidecar" in notes else notes.get("ignored_by_darktable", {})
+    return {"status": "ok", "applied": [k for k in params if k not in ignored],
+            "stored_but_not_rendered": [k for k in params if k in ignored]} | notes | {"edits": state.to_dict()}
 
 
 @mcp.tool()
@@ -343,6 +379,7 @@ def rotate_image(image_path: str, degrees: float) -> dict:
     Positive = clockwise, negative = counter-clockwise.
     Typical use: small corrections like +0.5 or -1.2 to straighten horizons.
     Large rotations (90, 180, 270) are also supported.
+    Not rendered yet for RAWs exported via darktable-cli (stored only; the result warns).
     """
     try:
         path, state = _load_or_new(image_path)
@@ -354,7 +391,7 @@ def rotate_image(image_path: str, degrees: float) -> dict:
     state.crop = crop
     state.save()
 
-    return {"status": "ok", "rotation_degrees": degrees}
+    return {"status": "ok", "rotation_degrees": degrees} | _darktable_notes(path, state)
 
 
 @mcp.tool()
@@ -429,7 +466,8 @@ def export_image(
     use_darktable_cli : bool
         Try to use darktable-cli for export when available (better RAW rendering).
     write_xmp_sidecar : bool
-        Write a Darktable-compatible XMP sidecar alongside the source file.
+        Write a Darktable-compatible XMP sidecar alongside the source file. Either way the render uses the
+        current edits, unless a sidecar written by darktable itself exists (that one is used and kept).
     max_dimension : int, optional
         Resize so the longest edge is at most this many pixels.
     """
@@ -452,25 +490,20 @@ def export_image(
         out_path = out_dir / f"{stem}_{counter}{ext}"
         counter += 1
 
-    xmp_path, xmp_note = None, None
-    if write_xmp_sidecar:
-        try:
-            xmp_path = write_xmp(state)
-            if xmp_path is None:
-                xmp_path = xmp_sidecar_path(path)
-                xmp_note = "existing sidecar kept (not written by this tool, may hold the user's own edits)"
-        except Exception as exc:
-            xmp_note = f"XMP write failed: {exc}"
-    xmp_info = {"xmp_sidecar": str(xmp_path) if xmp_path else None} | ({"xmp_note": xmp_note} if xmp_note else {})
-
+    is_raw = path.suffix.lower() in RAW_EXTENSIONS
     cli_error = None
-    if use_darktable_cli and DARKTABLE_CLI and path.suffix.lower() in RAW_EXTENSIONS:
-        result = _export_via_darktable_cli(path, out_path, xmp_path, quality, max_dimension)
-        if result.get("status") == "ok":
-            return result | {"format": format} | xmp_info
-        cli_error = result
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            xmp_path = _render_xmp(path, state, tmp, write_xmp_sidecar)
+            xmp_info = {"xmp_sidecar": str(xmp_path) if write_xmp_sidecar else None}
+        except Exception as exc:
+            xmp_path, xmp_info = None, {"xmp_note": f"XMP write failed: {exc}"}
+        if use_darktable_cli and DARKTABLE_CLI and is_raw:
+            result = _export_via_darktable_cli(path, out_path, xmp_path, quality, max_dimension)
+            if result.get("status") == "ok":
+                return result | {"format": format} | xmp_info | _darktable_notes(path, state)
+            cli_error = result
 
-    # Fall back to rawpy + Pillow
     proc = ImageProcessor(path)
     img = proc.process(state)
 
@@ -493,7 +526,7 @@ def export_image(
         "output_path": str(out_path),
         "format": format,
         "size_bytes": out_path.stat().st_size,
-        "rendered_via": "rawpy+pillow",
+        "rendered_via": "rawpy" if is_raw else "pillow",
     } | xmp_info | ({"darktable_cli_error": cli_error} if cli_error else {})
 
 
@@ -538,7 +571,8 @@ def get_histogram(image_path: str) -> dict:
     except FileNotFoundError as e:
         return {"error": str(e)}
 
-    arr = np.array(_render(path, state, 800), dtype=np.uint8)
+    img, info = _render(path, state, 800)
+    arr = np.array(img, dtype=np.uint8)
 
     def _hist(channel: np.ndarray) -> list[int]:
         counts, _ = np.histogram(channel.ravel(), bins=256, range=(0, 256))
@@ -564,7 +598,7 @@ def get_histogram(image_path: str) -> dict:
         "total_pixels": total_pixels,
         "highlight_clip_pct": round(clipped_highlights / total_pixels * 100, 2),
         "shadow_clip_pct": round(clipped_shadows / total_pixels * 100, 2),
-    }
+    } | info
 
 
 @mcp.tool()

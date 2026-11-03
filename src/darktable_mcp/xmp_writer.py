@@ -10,12 +10,11 @@ import struct
 from pathlib import Path
 from typing import Optional
 
-from .edits import EditState
+from .edits import AdjustmentState, EditState
 
 _BLENDOP = "gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="
 # Blending off, blend colour space "RGB (scene)" as darktable assigns to scene-referred RGB modules.
 _BLENDOP_SCENE = "gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"
-# Same multi_name as darktable's auto-applied instance, so ours replaces it instead of stacking.
 # Same multi_name as darktable's auto-applied instance, so ours replaces it instead of stacking.
 _SCENE_DEFAULT = "_builtin_scene-referred default"
 _DT_DEFAULT_EXPOSURE = 0.7
@@ -71,6 +70,20 @@ _ITEM = """\
       darktable:blendop_version="14"
       darktable:blendop_params="{blendop}"/>
 """
+
+
+_UNMAPPED = ("highlight_recovery", "shadow_lift", "brightness", "whites", "blacks", "vignette")
+
+
+def ignored_by_darktable(edit_state: EditState) -> dict[str, str]:
+    """Edits that are stored but not encoded in the XMP, so darktable-cli renders ignore them: name -> reason."""
+    adj, default = edit_state.adjustments, AdjustmentState()
+    ignored = {k: "no darktable module mapped yet" for k in _UNMAPPED if getattr(adj, k) != getattr(default, k)}
+    if adj.tint and adj.temperature_kelvin is None:
+        ignored["tint"] = "only applied together with temperature_kelvin"
+    if edit_state.crop and edit_state.crop.rotation:
+        ignored["rotation"] = "no darktable module mapped yet"
+    return ignored
 
 
 def _locus_xy(t: float) -> tuple[float, float]:
@@ -149,26 +162,21 @@ def xmp_sidecar_path(src: Path) -> Path:
     return src.with_name(src.name + ".xmp")
 
 
-def write_xmp(edit_state: EditState) -> Optional[Path]:
-    """Write the sidecar and return its path, or None if one written by darktable or another tool exists."""
-    text = xmp_text(edit_state)
-    if text is None:
-        return None
-    xmp_path = xmp_sidecar_path(edit_state.source_path)
-    xmp_path.write_text(text, encoding="utf-8")
-    return xmp_path
+def foreign_sidecar(src: Path) -> bool:
+    """True if the RAW's sidecar was written by darktable or another tool (it may hold the user's own edits).
 
-
-def xmp_text(edit_state: EditState) -> Optional[str]:
-    """Sidecar content, or None if an existing sidecar written by darktable or another tool must be kept."""
-    src = edit_state.source_path
+    darktable stamps import_timestamp from its library on every sidecar write (exif.cc _set_xmp_timestamps) and
+    keeps it when rewriting; this server never writes it. So a sidecar is ours only if it has a darktable
+    history and no import_timestamp.
+    """
     xmp_path = xmp_sidecar_path(src)
-    if xmp_path.exists():
-        # darktable always stamps import_timestamp (exif.cc); we never do. Anything else isn't ours to overwrite.
-        text = xmp_path.read_text(encoding="utf-8", errors="ignore")
-        if "darktable:history" not in text or "import_timestamp" in text:
-            return None
+    if not xmp_path.exists():
+        return False
+    text = xmp_path.read_text(encoding="utf-8", errors="ignore")
+    return "darktable:history" not in text or "import_timestamp" in text
 
+
+def xmp_text(edit_state: EditState) -> str:
     adj, crop = edit_state.adjustments, edit_state.crop
     mods: list[tuple[str, int, str, str, str]] = []
     if adj.exposure_ev or adj.black_level:
@@ -206,4 +214,4 @@ def xmp_text(edit_state: EditState) -> Optional[str]:
         _ITEM.format(num=i, op=op, ver=ver, params=p, name=name, blendop=b)
         for i, (op, ver, p, name, b) in enumerate(mods)
     )
-    return _HEADER.format(source=src.name, end=len(mods), items=items)
+    return _HEADER.format(source=edit_state.source_path.name, end=len(mods), items=items)
