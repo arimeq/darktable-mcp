@@ -83,6 +83,10 @@ def write_xmp(edit_state: EditState) -> Optional[Path]:
         # darktable's black slider spans ±0.1 and 0.01 already crushes shadows visibly, so scale the 0–0.5 range down
         params = struct.pack("<i4f2i", 0, adj.black_level / 10,_DT_DEFAULT_EXPOSURE + adj.exposure_ev, 50, -4, 1, 1)
         mods.append(("exposure", 7, params.hex(), _SCENE_DEFAULT, _BLENDOP_EXPOSURE))
+    if adj.dehaze_strength:
+        # hazeremoval v3: strength, distance, compatibility_mode=FALSE, adaptive=TRUE (5.6.1 defaults)
+        params = struct.pack("<2f2i", adj.dehaze_strength, adj.dehaze_distance, 0, 1)
+        mods.append(("hazeremoval", 3, params.hex(), "", _BLENDOP))
     if adj.contrast:
         floats = _FILMIC_FLOATS.copy()
         floats[14] = max(0.0, 1.0 + adj.contrast / 100)

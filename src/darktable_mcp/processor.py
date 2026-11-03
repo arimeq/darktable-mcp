@@ -144,6 +144,15 @@ def _apply_clarity(img: Image.Image, clarity: float) -> Image.Image:
         return img.filter(ImageFilter.GaussianBlur(radius=amount * 3))
 
 
+def _apply_dehaze(img: Image.Image, strength: float) -> Image.Image:
+    """Rough dark-channel-prior preview of darktable's haze removal (ignores distance)."""
+    arr = np.array(img, dtype=np.float32) / 255.0
+    dark = np.array(Image.fromarray((arr.min(axis=2) * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(15)), np.float32) / 255.0
+    airlight = arr.reshape(-1, 3)[dark.ravel() >= np.quantile(dark, 0.999)].mean(axis=0)
+    t = np.clip(1.0 - strength * dark / airlight.max(), 0.1, None)[..., None]
+    return Image.fromarray((np.clip((arr - airlight) / t + airlight, 0, 1) * 255).astype(np.uint8))
+
+
 def _apply_vibrance(img: Image.Image, vibrance: float) -> Image.Image:
     """Boost saturation selectively on less-saturated pixels."""
     if abs(vibrance) < 1.0:
@@ -314,6 +323,9 @@ class ImageProcessor:
         if adj.temperature_kelvin is not None:
             r, g, b = _kelvin_to_rgb_shift(adj.temperature_kelvin, adj.tint)
             img = _apply_wb_pillow(img, r, g, b)
+
+        if adj.dehaze_strength:
+            img = _apply_dehaze(img, adj.dehaze_strength)
 
         # Highlight & shadow recovery
         if adj.highlight_recovery > 0 or adj.shadow_lift > 0:

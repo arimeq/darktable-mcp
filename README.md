@@ -13,7 +13,7 @@ Tell Claude what you want — *"make this warmer and more dramatic"*, *"crop to 
 ## Features
 
 - 🖼️ **RAW file support** — CR2, NEF, ARW, RAF, DNG, ORF, RW2, and more
-- 🎨 **Full editing toolkit** — exposure, white balance, contrast, highlights/shadows, saturation, vibrance, clarity, sharpness, noise reduction, vignette
+- 🎨 **Full editing toolkit** — exposure, white balance, contrast, highlights/shadows, saturation, vibrance, clarity, haze removal, sharpness, noise reduction, vignette
 - ✂️ **Crop & rotate** — free crop, aspect ratio crop (16:9, 4:3, 1:1…), straighten
 - 📝 **Rename outputs** — give your exports meaningful names
 - 📊 **Histogram analysis** — Claude checks clipping and tonal distribution before suggesting edits

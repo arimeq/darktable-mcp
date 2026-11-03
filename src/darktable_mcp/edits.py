@@ -46,6 +46,8 @@ class AdjustmentState:
     # --- Effects ---
     vignette: float = 0.0   # -100 to +100 (negative = dark edges)
     clarity: float = 0.0    # -100 to +100 (local contrast)
+    dehaze_strength: float = 0.0  # darktable haze removal: -1 to +1 (negative adds haze)
+    dehaze_distance: float = 0.2  # 0 = foreground only, 1 = whole scene
 
 
 @dataclass
@@ -110,6 +112,7 @@ class EditState:
             a.sharpness != defaults.sharpness,
             a.noise_reduction != defaults.noise_reduction,
             a.vignette != defaults.vignette,
+            a.dehaze_strength != defaults.dehaze_strength,
             self.crop is not None,
             self.output_name is not None,
         ])

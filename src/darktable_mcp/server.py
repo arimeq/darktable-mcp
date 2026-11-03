@@ -153,6 +153,8 @@ def apply_adjustments(
     # Effects
     vignette: Optional[float] = None,
     clarity: Optional[float] = None,
+    dehaze_strength: Optional[float] = None,
+    dehaze_distance: Optional[float] = None,
 ) -> dict:
     """Apply one or more non-destructive adjustments to an image.
 
@@ -197,6 +199,11 @@ def apply_adjustments(
         Vignette: negative values darken edges, positive lighten (-100 to +100).
     clarity : float
         Local contrast / clarity (-100 to +100).
+    dehaze_strength : float
+        darktable "haze removal" strength (-1 to +1, GUI default 0.2). 0 = off; negative adds haze.
+        Only useful on genuinely hazy/foggy scenes; it is not a contrast tool.
+    dehaze_distance : float
+        How deep into the scene haze is removed (0 = foreground only, 1 = whole image; default 0.2).
     """
     try:
         path, state = _load_or_new(image_path)
@@ -222,6 +229,8 @@ def apply_adjustments(
         "noise_reduction": noise_reduction,
         "vignette": vignette,
         "clarity": clarity,
+        "dehaze_strength": dehaze_strength,
+        "dehaze_distance": dehaze_distance,
     }.items() if v is not None}
 
     state.update(params)
