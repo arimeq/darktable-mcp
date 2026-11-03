@@ -163,7 +163,9 @@ Each image gets a companion `.mcp.json` sidecar file (e.g. `IMG_3500.mcp.json`) 
 
 On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too. A sidecar already written by Darktable itself is never overwritten.
 
-When `darktable-cli` is installed, RAW previews, histograms and exports are all rendered by it from that XMP, so what Claude sees is what gets exported. Each result says which renderer was used (`rendered_via`), and falls back to `rawpy` with a warning if darktable-cli fails. If the RAW already has a sidecar written by Darktable, it is rendered as-is and the tools warn that their edits are not applied.
+When `darktable-cli` is installed, RAW previews, histograms and exports are all rendered by it from that XMP, so what Claude sees is what gets exported. Each result says which renderer was used (`rendered_via`), and falls back to `rawpy` with a warning if darktable-cli fails. If the RAW already has a sidecar written by Darktable:
+- if it holds Darktable edits, it is rendered as-is and the tools warn that their edits are not applied;
+- if it holds none (Darktable writes one at import), your edits are rendered, but the sidecar is still never overwritten, and the export says the edits were not saved to any sidecar.
 
 | Adjustment | Darktable module |
 |---|---|

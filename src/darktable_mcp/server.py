@@ -14,7 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
+from .xmp_writer import foreign_edits, foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
 
 mcp = MCPServer("DarktableMCP")
 
@@ -43,24 +43,29 @@ def _darktable_notes(path: Path, state: EditState) -> dict:
     """Why a darktable-cli render may not show the stored edits; empty if it shows all of them."""
     if path.suffix.lower() not in RAW_EXTENSIONS or not DARKTABLE_CLI:
         return {}
-    if foreign_sidecar(path):
+    name = xmp_sidecar_path(path).name
+    if foreign_edits(path):
         return {"foreign_sidecar": str(xmp_sidecar_path(path)),
-                "warning": f"{xmp_sidecar_path(path).name} was written by darktable or another tool and may hold "
-                           "the user's own edits. Preview and export render it as-is: NONE of the edits made "
-                           "with this server's tools are applied, and the sidecar is never overwritten."}
+                "warning": f"{name} holds the user's own darktable edits. Preview and export render it as-is: "
+                           "NONE of the edits made with this server's tools are applied, and the sidecar is "
+                           "never overwritten."}
+    notes = {}
+    if foreign_sidecar(path):
+        notes["sidecar_note"] = (f"{name} was written by darktable or another tool but holds no darktable edits. "
+                                 "Your edits are rendered, but never saved into it.")
     if ignored := ignored_by_darktable(state):
-        return {"ignored_by_darktable": ignored,
-                "warning": "These edits are stored but have no effect on the preview or export; "
-                           "changing them further does nothing."}
-    return {}
+        notes |= {"ignored_by_darktable": ignored,
+                  "warning": "These edits are stored but have no effect on the preview or export; "
+                             "changing them further does nothing."}
+    return notes
 
 
 def _render_xmp(path: Path, state: EditState, tmp: str, persist: bool) -> Path:
-    """The XMP darktable-cli renders with: a foreign sidecar as-is, else our edits, written as the real sidecar
-    only when *persist* (previews must not touch it: darktable may be running)."""
-    if foreign_sidecar(path):
+    """The XMP darktable-cli renders with: a foreign sidecar with edits as-is, else our edits, written as the
+    real sidecar only when *persist* and it isn't foreign (previews must not touch it: darktable may be running)."""
+    if foreign_edits(path):
         return xmp_sidecar_path(path)
-    xmp = xmp_sidecar_path(path) if persist else Path(tmp, "edit.xmp")
+    xmp = xmp_sidecar_path(path) if persist and not foreign_sidecar(path) else Path(tmp, "edit.xmp")
     xmp.write_text(xmp_text(state), encoding="utf-8")
     return xmp
 
@@ -499,7 +504,13 @@ def export_image(
     with tempfile.TemporaryDirectory() as tmp:
         try:
             xmp_path = _render_xmp(path, state, tmp, write_xmp_sidecar)
-            xmp_info = {"xmp_sidecar": str(xmp_path) if write_xmp_sidecar else None}
+            saved = write_xmp_sidecar and not foreign_sidecar(path)
+            xmp_info = {"xmp_sidecar": str(xmp_path) if saved else None}
+            if write_xmp_sidecar and not saved and not foreign_edits(path):
+                xmp_info["edits_not_saved"] = (
+                    f"These edits were NOT saved to any XMP sidecar: {xmp_sidecar_path(path).name} was written by "
+                    "darktable or another tool and is never overwritten. darktable will not show them; apart from "
+                    "this server's .mcp.json, the exported image is the only record of them.")
         except Exception as exc:
             xmp_path, xmp_info = None, {"xmp_note": f"XMP write failed: {exc}"}
         if use_darktable_cli and DARKTABLE_CLI and is_raw:

@@ -6,6 +6,7 @@ darktable 5.6.1 sidecars and confirmed by rendering with darktable-cli.
 from __future__ import annotations
 
 import math
+import re
 import struct
 from pathlib import Path
 from typing import Optional
@@ -174,6 +175,18 @@ def foreign_sidecar(src: Path) -> bool:
         return False
     text = xmp_path.read_text(encoding="utf-8", errors="ignore")
     return "darktable:history" not in text or "import_timestamp" in text
+
+
+def foreign_edits(src: Path) -> bool:
+    """True if a foreign sidecar holds a darktable edit history (history_end > 0), which must be rendered as-is.
+
+    darktable also writes sidecars at import, with history_end="0"; those hold no edits (only metadata such as
+    tags and ratings), so our edits can be rendered while the file itself is still never overwritten.
+    """
+    if not foreign_sidecar(src):
+        return False
+    m = re.search(r'darktable:history_end="(\d+)"', xmp_sidecar_path(src).read_text(encoding="utf-8", errors="ignore"))
+    return bool(m and int(m.group(1)))
 
 
 def xmp_text(edit_state: EditState) -> str:
