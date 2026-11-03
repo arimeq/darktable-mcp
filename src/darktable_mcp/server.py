@@ -191,25 +191,30 @@ def apply_adjustments(
     shadow_lift : float
         Open up dark shadows (0.0–1.0).
     temperature_kelvin : float
-        Colour temperature (2000–12000 K).  ~5500 K is daylight, ~3200 K is tungsten.
+        Light source to neutralise (1667–25000 K): higher = warmer image.  ~5500 K is daylight, ~3200 K is
+        tungsten.  Unset = as shot.  darktable color calibration illuminant.
     tint : float
-        Green (positive) / magenta (negative) tint correction (-100 to +100).
+        Positive = greener, negative = more magenta (-100 to +100, ±100 = 0.02 Duv).
+        Only applied together with temperature_kelvin.
     contrast : float
         Global contrast (-100 to +100).
     brightness : float
         Global brightness (-100 to +100).
     highlights : float
-        Recover (negative) or boost (positive) highlights (-100 to +100).
+        Darken (negative) or brighten (positive) highlights (-100 to +100 = ±1.5 EV in the brightest bands).
+        darktable tone equalizer.
     shadows : float
-        Open shadows (-100 to +100).
+        Lift (positive) or deepen (negative) shadows (-100 to +100 = ±1.5 EV in the darkest bands).
+        darktable tone equalizer.
     whites : float
         White-point adjustment (-100 to +100).
     blacks : float
         Black-point adjustment (-100 to +100).
     saturation : float
-        Global colour saturation (-100 to +100).  0 = original.
+        Colourfulness at constant brightness (-100 = monochrome, +100 = strong, about +60 % chroma).
+        darktable color balance rgb global chroma.
     vibrance : float
-        Selective saturation boost for muted colours (-100 to +100).
+        Colourfulness, slightly favouring muted colours (-100 to +100).  color balance rgb global vibrance.
     sharpness : float
         Sharpening strength (0 to 100).
     noise_reduction : float
