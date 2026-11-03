@@ -221,7 +221,9 @@ def apply_adjustments(
     Parameters
     ----------
     exposure_ev : float
-        Exposure in stops (-5 to +5).  0 = no change.
+        Exposure in stops (-5 to +5), relative to darktable's default.  0 = darktable's own starting
+        brightness for RAWs: +0.7 EV plus compensation of the camera's exposure bias (e.g. a shot at -1 EV
+        gets +1 EV back).  So +1 means 1 EV brighter than darktable's default, not than the raw file.
     black_level : float
         Lift or crush the black point (0.0–0.5).
     highlight_recovery : float

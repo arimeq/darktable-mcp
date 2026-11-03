@@ -182,6 +182,8 @@ When `darktable-cli` is installed, RAW previews, histograms and exports are all 
 
 Brightness, whites, blacks, vignette, highlight recovery, shadow lift and rotation are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
 
+**What `exposure_ev = 0` means.** In its scene-referred workflows, Darktable auto-applies an exposure of +0.7 EV to every RAW and adds back any exposure bias set on the camera (a shot at −1 EV gets +1 EV). The server's exposure replaces that instance but builds on its values, so `exposure_ev` is relative to Darktable's default: 0 looks exactly like a freshly imported RAW in Darktable, and +1 is one stop brighter than that.
+
 ---
 
 ## Troubleshooting

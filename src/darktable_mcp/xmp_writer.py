@@ -18,7 +18,8 @@ _BLENDOP = "gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="
 _BLENDOP_SCENE = "gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxwX+AwGIBgCbGCeh"
 # Same multi_name as darktable's auto-applied instance, so ours replaces it instead of stacking.
 _SCENE_DEFAULT = "_builtin_scene-referred default"
-_DT_DEFAULT_EXPOSURE = 0.7
+# Values of the auto-applied scene-referred exposure instance (exposure.c reload_defaults).
+_DT_DEFAULT_EXPOSURE, _DT_DEFAULT_BLACK = 0.7, -0.000244140625
 
 # Blob of darktable's built-in preset "_builtin_wavelets: chroma only" (denoiseprofile v12).
 _DENOISE_CHROMA = (
@@ -193,8 +194,11 @@ def xmp_text(edit_state: EditState) -> str:
     adj, crop = edit_state.adjustments, edit_state.crop
     mods: list[tuple[str, int, str, str, str]] = []
     if adj.exposure_ev or adj.black_level:
+        # Replaces darktable's auto-applied instance (same multi_name) but keeps its values at 0, so our values are
+        # relative to darktable's default. Last two ints: compensate camera exposure bias, highlight preservation.
         # darktable's black slider spans ±0.1 and 0.01 already crushes shadows visibly, so scale the 0–0.5 range down
-        params = struct.pack("<i4f2i", 0, adj.black_level / 10,_DT_DEFAULT_EXPOSURE + adj.exposure_ev, 50, -4, 1, 1)
+        params = struct.pack("<i4f2i", 0, _DT_DEFAULT_BLACK + adj.black_level / 10,
+                             _DT_DEFAULT_EXPOSURE + adj.exposure_ev, 50, -4, 1, 1)
         mods.append(("exposure", 7, params.hex(), _SCENE_DEFAULT, _BLENDOP_SCENE))
     if adj.dehaze_strength:
         # hazeremoval v3: strength, distance, compatibility_mode=FALSE, adaptive=TRUE (5.6.1 defaults)
