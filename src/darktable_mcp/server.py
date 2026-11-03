@@ -449,7 +449,7 @@ def export_image(
 
     if max_dimension:
         from PIL import Image as PILImage
-        img.thumbnail((max_dimension, max_dimension), PILImage.LANCZOS)
+        img.thumbnail((max_dimension, max_dimension), PILImage.Resampling.LANCZOS)
 
     save_kwargs: dict = {}
     if format.lower() in ("jpeg", "jpg"):
