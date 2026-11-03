@@ -125,7 +125,7 @@ Claude will:
 1. Call `list_images` to see your folder
 2. Call `get_image_preview` to analyse the photo
 3. Call `apply_adjustments` with specific values
-4. Show you a preview (saved as `filename__preview.jpg` next to the source)
+4. Look at a fresh preview (pass `save` / `open_viewer` to also write `filename__preview.jpg` and open it)
 5. Iterate based on your feedback
 6. Export the final image when you're happy
 
@@ -163,6 +163,22 @@ Each image gets a companion `.mcp.json` sidecar file (e.g. `IMG_3500.mcp.json`) 
 
 On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too. A sidecar already written by Darktable itself is never overwritten.
 
+When `darktable-cli` is installed, RAW previews, histograms and exports are all rendered by it from that XMP, so what Claude sees is what gets exported. Each result says which renderer was used (`rendered_via`), and falls back to `rawpy` with a warning if darktable-cli fails. If the RAW already has a sidecar written by Darktable, it is rendered as-is and the tools warn that their edits are not applied.
+
+| Adjustment | Darktable module |
+|---|---|
+| exposure, black level | exposure |
+| temperature, tint | color calibration (CAT tab illuminant) |
+| shadows, highlights | tone equalizer |
+| saturation, vibrance | color balance rgb (global chroma, global vibrance) |
+| contrast | filmic rgb |
+| clarity | local contrast |
+| dehaze | haze removal |
+| sharpness, noise reduction | sharpen, denoise (profiled) |
+| crop | crop |
+
+Brightness, whites, blacks, vignette, highlight recovery, shadow lift and rotation are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
+
 ---
 
 ## Troubleshooting
@@ -177,7 +193,7 @@ Use the full path to your Python executable in the config. Run `where python` (W
 Some camera models need an updated version of `rawpy`. Run `pip install --upgrade rawpy`.
 
 **Preview file not opening**  
-The preview is always saved as `originalname__preview.jpg` next to your source file. Open it manually if your system doesn't pop it up automatically.
+Previews are only written to disk when you ask for it (`save` or `open_viewer`), as `originalname__preview.jpg` next to your source file. Open it manually if your system doesn't pop it up automatically.
 
 ---
 
