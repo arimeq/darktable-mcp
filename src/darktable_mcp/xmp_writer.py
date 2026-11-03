@@ -70,12 +70,19 @@ _ITEM = """\
 """
 
 
+def xmp_sidecar_path(src: Path) -> Path:
+    return src.with_name(src.name + ".xmp")
+
+
 def write_xmp(edit_state: EditState) -> Optional[Path]:
-    """Write the sidecar and return its path, or None if one already exists (it may hold the user's own edits)."""
+    """Write the sidecar and return its path, or None if one written by darktable or another tool exists."""
     src = edit_state.source_path
-    xmp_path = src.with_name(src.name + ".xmp")
+    xmp_path = xmp_sidecar_path(src)
     if xmp_path.exists():
-        return None
+        # darktable always stamps import_timestamp (exif.cc); we never do. Anything else isn't ours to overwrite.
+        text = xmp_path.read_text(encoding="utf-8", errors="ignore")
+        if "darktable:history" not in text or "import_timestamp" in text:
+            return None
 
     adj, crop = edit_state.adjustments, edit_state.crop
     mods: list[tuple[str, int, str, str, str]] = []

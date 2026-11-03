@@ -161,7 +161,7 @@ Claude will:
 
 Each image gets a companion `.mcp.json` sidecar file (e.g. `IMG_3500.mcp.json`) that stores all adjustments non-destructively. Your original RAW files are never modified.
 
-On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too.
+On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too. A sidecar already written by Darktable itself is never overwritten.
 
 ---
 

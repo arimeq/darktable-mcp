@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +14,7 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import write_xmp
+from .xmp_writer import write_xmp, xmp_sidecar_path
 
 mcp = MCPServer("DarktableMCP")
 
@@ -428,20 +430,23 @@ def export_image(
         out_path = out_dir / f"{stem}_{counter}{ext}"
         counter += 1
 
-    # Optionally write Darktable XMP sidecar
-    xmp_path = None
+    xmp_path, xmp_note = None, None
     if write_xmp_sidecar:
         try:
             xmp_path = write_xmp(state)
+            if xmp_path is None:
+                xmp_path = xmp_sidecar_path(path)
+                xmp_note = "existing sidecar kept (not written by this tool, may hold the user's own edits)"
         except Exception as exc:
-            xmp_path = None  # non-fatal
+            xmp_note = f"XMP write failed: {exc}"
+    xmp_info = {"xmp_sidecar": str(xmp_path) if xmp_path else None} | ({"xmp_note": xmp_note} if xmp_note else {})
 
-    # Try darktable-cli first for RAW files
+    cli_error = None
     if use_darktable_cli and DARKTABLE_CLI and path.suffix.lower() in RAW_EXTENSIONS:
-        result = _export_via_darktable_cli(path, out_path, xmp_path, quality)
+        result = _export_via_darktable_cli(path, out_path, xmp_path, quality, max_dimension)
         if result.get("status") == "ok":
-            result["xmp_sidecar"] = str(xmp_path) if xmp_path else None
-            return result
+            return result | {"format": format} | xmp_info
+        cli_error = result
 
     # Fall back to rawpy + Pillow
     proc = ImageProcessor(path)
@@ -466,29 +471,35 @@ def export_image(
         "output_path": str(out_path),
         "format": format,
         "size_bytes": out_path.stat().st_size,
-        "xmp_sidecar": str(xmp_path) if xmp_path else None,
         "rendered_via": "rawpy+pillow",
-    }
+    } | xmp_info | ({"darktable_cli_error": cli_error} if cli_error else {})
 
 
 def _export_via_darktable_cli(
-    src: Path, dst: Path, xmp: Optional[Path], quality: int
+    src: Path, dst: Path, xmp: Optional[Path], quality: int, max_dimension: Optional[int]
 ) -> dict:
-    cmd = [DARKTABLE_CLI, str(src), str(xmp) if xmp else "", str(dst),
-           "--width", "0", "--height", "0",
-           "--quality", str(quality)]
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode == 0 and dst.exists():
-            return {
-                "status": "ok",
-                "output_path": str(dst),
-                "rendered_via": "darktable-cli",
-                "size_bytes": dst.stat().st_size,
-            }
-        return {"status": "error", "stderr": result.stderr[:500]}
-    except Exception as exc:
-        return {"status": "error", "exception": str(exc)}
+    # Throwaway configdir seeded with the user's darktablerc (workflow) and data.db (presets/styles);
+    # in-memory library so the user's library.db is never touched.
+    with tempfile.TemporaryDirectory() as cfg:
+        user_cfg = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".config")) / "darktable"
+        for name in ("darktablerc", "data.db"):
+            if (user_cfg / name).exists():
+                shutil.copy2(user_cfg / name, cfg)
+        size = str(max_dimension or 0)
+        # darktable-cli drops backslashes, so pass forward-slash paths
+        cmd = [DARKTABLE_CLI, src.as_posix(), *([xmp.as_posix()] if xmp else []), dst.as_posix(),
+               "--width", size, "--height", size, "--hq", "true",
+               "--core", "--configdir", Path(cfg).as_posix(), "--library", ":memory:",
+               "--conf", f"plugins/imageio/format/jpeg/quality={quality}"]
+        try:
+            # darktable-cli exits 0 even on bad arguments, so success = output file exists
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        except Exception as exc:
+            return {"status": "error", "exception": str(exc)}
+    if dst.exists():
+        return {"status": "ok", "output_path": str(dst), "rendered_via": "darktable-cli",
+                "size_bytes": dst.stat().st_size}
+    return {"status": "error", "returncode": result.returncode, "output": (result.stderr or result.stdout)[-500:]}
 
 
 @mcp.tool()
