@@ -230,7 +230,11 @@ def apply_adjustments(
         Positive = greener, negative = more magenta (-100 to +100, ±100 = 0.02 Duv).
         Only applied together with temperature_kelvin.
     contrast : float
-        Global contrast (-100 to +100).
+        Global contrast around middle grey (-100 to +100), at constant colour.  darktable color balance
+        rgb contrast, applied before the workflow's tone mapper (sigmoid / filmic / AgX).  On bright or
+        backlit images positive values push highlights into the tone mapper's compression and clip them
+        (a backlit test shot went from 0.2 % to 6 % clipped at +50, 0.6 % at +25): check get_histogram,
+        and prefer a smaller value or highlights < 0 (which also darkens a high-key frame overall).
     brightness : float
         [not rendered] Global brightness (-100 to +100).
     highlights : float

@@ -19,9 +19,6 @@ _BLENDOP_SCENE = "gz08eJxjYGBgYAFiCQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dlAx68oBEMbFxw
 _SCENE_DEFAULT = "_builtin_scene-referred default"
 _DT_DEFAULT_EXPOSURE = 0.7
 
-_FILMIC_FLOATS = [18.45, -7.4833, 4.8267, 0, 3, 100, 100, 0, 0, 18.45, 0.0152, 100, 3.3956, 0.01, 1.0, 0, 0, 0.2]
-_FILMIC_INTS = [3, 4, 1, 0, 1, 1, 0, 0, 0, 2, 0]
-
 # Blob of darktable's built-in preset "_builtin_wavelets: chroma only" (denoiseprofile v12).
 _DENOISE_CHROMA = (
     "0000803f0000e0409a99993f000000000000000000000000cdcccc3d0000803f000080bf"
@@ -142,19 +139,22 @@ def _tone_equalizer(shadows: float, highlights: float) -> bytes:
     return struct.pack("<15f3i", *bands, 3.0, math.sqrt(2), 7.0, 0.0, 0.0, -1.57, 4, 4, 3)
 
 
-def _color_balance(saturation: float, vibrance: float) -> bytes:
-    """colorbalancergb v5, neutral except global chroma and global vibrance.
+def _color_balance(saturation: float, vibrance: float, contrast: float) -> bytes:
+    """colorbalancergb v5, neutral except global chroma, global vibrance and contrast.
 
     Global chroma, not global saturation: chroma scales colourfulness at constant luminance and is computed in
     the same step as vibrance; saturation is darktable's perceptual one that also darkens what it saturates.
-    Scale: -100 → chroma -1 (monochrome), +100 → +0.5; vibrance ±100 → ±0.5. 0.5 is the end of darktable's own
-    slider soft range, where the effect is strong but still usable.
+    Contrast is a power curve on luminance around middle grey (0.1845) at constant chromaticity. It runs
+    before every tone mapper (iop_order.c), so it works whichever one the user's workflow auto-applies.
+    Scale: saturation -100 → chroma -1 (monochrome), +100 → +0.5; vibrance and contrast ±100 → ±0.5.
+    0.5 is the end of darktable's own slider soft range, where the effect is strong but still usable.
     """
     f = [0.0] * 32
     f[12] = f[14] = 1.0  # shadows / highlights fall-off
     f[17] = saturation / 100 * (0.5 if saturation > 0 else 1.0)  # chroma_global
     f[28] = f[30] = 0.1845  # mask / contrast grey fulcrum
     f[29] = vibrance / 100 * 0.5
+    f[31] = contrast / 100 * 0.5
     return struct.pack("<32fi", *f, 1)  # saturation formula: darktable UCS (module default)
 
 
@@ -193,12 +193,9 @@ def xmp_text(edit_state: EditState) -> str:
                      _SCENE_DEFAULT, _BLENDOP_SCENE))
     if adj.shadows or adj.highlights:
         mods.append(("toneequal", 2, _tone_equalizer(adj.shadows, adj.highlights).hex(), "", _BLENDOP_SCENE))
-    if adj.saturation or adj.vibrance:
-        mods.append(("colorbalancergb", 5, _color_balance(adj.saturation, adj.vibrance).hex(), "", _BLENDOP_SCENE))
-    if adj.contrast:
-        floats = _FILMIC_FLOATS.copy()
-        floats[14] = max(0.0, 1.0 + adj.contrast / 100)
-        mods.append(("filmicrgb", 6, struct.pack("<18f11i", *floats, *_FILMIC_INTS).hex(), _SCENE_DEFAULT, _BLENDOP))
+    if adj.saturation or adj.vibrance or adj.contrast:
+        params = _color_balance(adj.saturation, adj.vibrance, adj.contrast)
+        mods.append(("colorbalancergb", 5, params.hex(), "", _BLENDOP_SCENE))
     if adj.clarity:
         mods.append(("bilat", 3, struct.pack("<i4f", 0, 50, 50, 1.0 + adj.clarity / 100, 0.2).hex(), "", _BLENDOP))
     if adj.sharpness > 0:

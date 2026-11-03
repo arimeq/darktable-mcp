@@ -171,7 +171,8 @@ When `darktable-cli` is installed, RAW previews, histograms and exports are all 
 | temperature, tint | color calibration (CAT tab illuminant) |
 | shadows, highlights | tone equalizer |
 | saturation, vibrance | color balance rgb (global chroma, global vibrance) |
-| contrast | filmic rgb |
+| tone mapper | none written: darktable applies the one your workflow uses (sigmoid, filmic or AgX) |
+| contrast | color balance rgb (contrast) |
 | clarity | local contrast |
 | dehaze | haze removal |
 | sharpness, noise reduction | sharpen, denoise (profiled) |
