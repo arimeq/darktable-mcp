@@ -39,24 +39,21 @@ def _load_or_new(image_path: str) -> tuple[Path, EditState]:
     return path, state
 
 
-def _quick_preview(path: Path, state: EditState, max_size: int) -> Image:
-    proc = ImageProcessor(path)
-    img = proc.process(state, preview_size=max_size)
+def _quick_preview(path: Path, state: EditState, max_size: int) -> bytes:
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85, optimize=True)
-    return img, buf.getvalue()
+    ImageProcessor(path).process(state, preview_size=max_size).save(buf, format="JPEG", quality=85, optimize=True)
+    return buf.getvalue()
 
 
-def _save_and_open_preview(path: Path, img_bytes: bytes) -> str:
-    """Save preview to disk next to the source file and open it."""
+def _save_preview(path: Path, img_bytes: bytes, open_file: bool) -> str:
     import os
     preview_path = path.with_name(path.stem + "__preview.jpg")
     preview_path.write_bytes(img_bytes)
-    try:
-        import os
-        os.startfile(str(preview_path))   # Windows: opens in default image viewer
-    except Exception:
-        pass
+    if open_file:
+        try:
+            os.startfile(str(preview_path))   # Windows: opens in default image viewer
+        except Exception:
+            pass
     return str(preview_path)
 
 
@@ -106,12 +103,14 @@ def get_image_info(image_path: str) -> dict:
 
 
 @mcp.tool()
-def get_image_preview(image_path: str, max_size: int = 1200) -> list:
-    """Render the image with all current edits applied, save a preview file, and open it.
+def get_image_preview(
+    image_path: str, max_size: int = 1200, save: bool = False, open_viewer: bool = False
+) -> list:
+    """Render the image with all current edits applied and return it for analysis.
 
-    Saves a __preview.jpg next to the source and opens it in the Windows image
-    viewer so the user can see it immediately.  Also returns the image so Claude
-    can analyse it and suggest further improvements.
+    By default nothing is written to disk and no window is opened.
+    *save*: also write a __preview.jpg next to the source.
+    *open_viewer*: save the preview and open it in the Windows image viewer (implies *save*).
     *max_size* controls the longest edge of the preview in pixels (default 1200).
     """
     try:
@@ -119,13 +118,14 @@ def get_image_preview(image_path: str, max_size: int = 1200) -> list:
     except FileNotFoundError as e:
         return [f"Error: {e}"]
 
-    _img, img_bytes = _quick_preview(path, state, max_size)
-    preview_path = _save_and_open_preview(path, img_bytes)
+    img_bytes = _quick_preview(path, state, max_size)
+    msg = "Preview rendered (not saved)."
+    if save or open_viewer:
+        msg = f"Preview saved to: {_save_preview(path, img_bytes, open_viewer)}"
+        if open_viewer:
+            msg += "\nOpening in your image viewer now..."
 
-    return [
-        f"Preview saved to: {preview_path}\nOpening in your image viewer now...",
-        Image(data=img_bytes, format="jpeg"),
-    ]
+    return [msg, Image(data=img_bytes, format="jpeg")]
 
 
 @mcp.tool()
