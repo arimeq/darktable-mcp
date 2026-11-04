@@ -15,7 +15,8 @@ from mcp.server.mcpserver import Image, MCPServer
 
 from .edits import CropState, EditState, GraduatedState, MaskedAdjustment, MaskState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import MASKABLE, foreign_edits, foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
+from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_flip,
+                         xmp_sidecar_path, xmp_text)
 
 mcp = MCPServer("DarktableMCP")
 
@@ -37,6 +38,13 @@ def _load_or_new(image_path: str) -> tuple[Path, EditState]:
     if not path.exists():
         raise FileNotFoundError(f"Image not found: {image_path}")
     state = EditState.load(path) or EditState(source_path=path)
+    if state.version < 2:
+        # Older gradients were stored in the sensor's frame: turning them by the same angle keeps them in place
+        if gradients := [m.mask.gradient for m in state.masked if m.mask.gradient]:
+            turn = TURN[raw_flip(path)]
+            for g in gradients:
+                g.rotation -= turn
+        state.version = 2
     return path, state
 
 

@@ -109,6 +109,8 @@ class EditState:
     graduated: Optional[GraduatedState] = None
     masked: list[MaskedAdjustment] = field(default_factory=list)
     output_name: Optional[str] = None  # stem only, no extension
+    # 2: gradient masks are upright (before: in the sensor's frame, which differs on portrait shots)
+    version: int = 2
 
     # ------------------------------------------------------------------
     # Persistence
@@ -135,6 +137,7 @@ class EditState:
         state.graduated = GraduatedState(**data["graduated"]) if data.get("graduated") else None
         state.masked = [MaskedAdjustment(**m) for m in data.get("masked", [])]
         state.output_name = data.get("output_name")
+        state.version = data.get("version", 1)
         return state
 
     def save(self):
@@ -176,4 +179,5 @@ class EditState:
             "graduated": asdict(self.graduated) if self.graduated else None,
             "masked": [asdict(m) for m in self.masked],
             "output_name": self.output_name,
+            "version": self.version,
         }
