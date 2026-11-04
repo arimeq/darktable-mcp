@@ -476,10 +476,14 @@ _MASK_DOC = """
         relative to the image the instance receives (no +0.7 EV default).
     mask : dict, any combination of (all present parts must match: drawn × parametric):
         gradient : {rotation, offset, compression}
-            Drawn gradient on the full uncropped frame (sensor orientation: portrait shots are turned).
-            rotation in darktable's degrees: 0 = mask on the top, 90 = left, -90 = right, 180 = bottom.
-            offset = % position of the transition line from that edge (50 = centre).  compression = transition
-            width in % (darktable default 50 = very soft, the whole frame; 5–15 = short transition).
+            Drawn gradient on the full uncropped frame, upright as displayed (portrait shots included).
+            rotation in degrees: 0 = mask on the top, 90 = left, -90 = right, 180 = bottom.
+            offset = % position of the transition line from that edge (50 = centre).
+            compression = darktable's value in %: a sigmoid (erf) transition whose visible part spans about
+            3 × compression % of the frame diagonal and which is exactly 0 beyond 4 × compression %.  On 3:2
+            that is ~3.5 × compression % of the long side, ~5 × of the short one (portrait, top/bottom: 3 → ~10 %
+            of the height, 8 → ~30 %).  2–5 = short transition; darktable's default 50 = the whole frame.
+            Confirm placement and width with export_mask_preview.
         luminance : [from, full_from, full_to, to]
             darktable's "g" (gray) slider in %: the mask is 0 below *from*, rises to 1 at *full_from*, stays 1
             to *full_to* and falls to 0 at *to*; 100 as the last two = no upper limit.  Linear values of the

@@ -29,9 +29,9 @@ class GraduatedState:
 @dataclass
 class GradientMask:
     """darktable drawn gradient mask, placed on the full uncropped frame."""
-    rotation: float = 0.0      # degrees, as darktable stores it: 0 = mask on top, 90 = left, 180 = bottom
+    rotation: float = 0.0      # degrees, upright frame: 0 = mask on top, 90 = left, 180 = bottom
     offset: float = 50.0       # % position of the transition line, from the edge the mask covers
-    compression: float = 50.0  # %, darktable's default 50; small = short, hard transition
+    compression: float = 50.0  # % of the diagonal, darktable's scale: visible transition ≈ 3×, zero beyond 4×
 
 
 @dataclass

@@ -281,15 +281,25 @@ def _blendop_masked(mask: MaskState, group_id: int) -> str:
                        b"", 0, -1, 0).hex()
 
 
-def _gradient_points(g: GradientMask) -> bytes:
+def raw_flip(src: Path) -> int:
+    """LibRaw's flip, bit for bit darktable's dt_image_orientation_t (both from dcraw)."""
+    import rawpy
+    with rawpy.imread(str(src)) as raw:
+        return raw.sizes.flip
+
+
+def _gradient_points(g: GradientMask, flip: int) -> bytes:
     """dt_masks_point_gradient_t (masks.h): anchor x/y, rotation, compression, steepness, curvature, state.
 
-    Coordinates are normalised to the full uncropped frame. gradient.c: at rotation r the mask rises towards
-    (-sin r, -cos r), so the anchor sits *offset* % from that edge. Sigmoidal state, as the GUI creates it.
+    Coordinates are normalised to the full uncropped sensor frame, before darktable's flip turns it upright,
+    so the displayed rotation/anchor are mapped back by the RAW's orientation (checked with darktable's flip at
+    orientations 5 and 6). gradient.c: at rotation r the mask rises towards (-sin r, -cos r), so the anchor sits
+    *offset* % from that edge. Sigmoidal state, as the GUI creates it.
     """
     d, r = (50 - g.offset) / 100, math.radians(g.rotation)
-    return struct.pack("<6fi", 0.5 - d * math.sin(r), 0.5 - d * math.cos(r), g.rotation, g.compression / 100,
-                       0.0, 0.0, 2)
+    x, y = 0.5 - d * math.sin(r), 0.5 - d * math.cos(r)
+    (x, y), turn = {0: ((x, y), 0), 3: ((1 - x, 1 - y), 180), 5: ((y, 1 - x), 90), 6: ((1 - y, x), -90)}[flip]
+    return struct.pack("<6fi", x, y, g.rotation + turn, g.compression / 100, 0.0, 0.0, 2)
 
 
 def xmp_text(edit_state: EditState) -> str:
@@ -299,10 +309,11 @@ def xmp_text(edit_state: EditState) -> str:
         params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)
         mods.append(("graduatednd", 1, params.hex(), "", _BLENDOP_SCENE, 0))
     forms, instances = [], {}
+    flip = raw_flip(edit_state.source_path) if any(m.mask.gradient for m in edit_state.masked) else 0
     for n, m in enumerate(edit_state.masked):
         gradient_id = 2000 + n if m.mask.gradient else 0
         if gradient_id:
-            forms.append((gradient_id, 16, f"gradient #{n + 1}", _gradient_points(m.mask.gradient).hex(), 1))
+            forms.append((gradient_id, 16, f"gradient #{n + 1}", _gradient_points(m.mask.gradient, flip).hex(), 1))
         for op, ver, params, _, _ in _modules(AdjustmentState(**m.adjustments), masked=True):
             group_id = 0
             if gradient_id:

@@ -5,13 +5,14 @@ Run scripts/cloud-setup.sh first; it fetches darktable-cli and the samples into 
 import io
 import re
 import shutil
+import struct
 import subprocess
 
 import numpy as np
 import pytest
 from PIL import Image
 
-from darktable_mcp import server
+from darktable_mcp import server, xmp_writer
 from darktable_mcp.xmp_writer import xmp_sidecar_path
 
 DATA = server.Path(__file__).parent / "data"
@@ -107,3 +108,34 @@ def test_mask_preview_shows_gradient(raw):
     m = np.asarray(Image.open(io.BytesIO(out[1].data)), float)
     w = m.shape[1] // 4
     assert m[:, :w].mean() > 200 and m[:, -w:].mean() < 50  # rotation 90 = left
+
+
+def test_gradient_leaves_far_side_untouched(raw, tmp_path):
+    base = export_gray(raw, str(tmp_path / "a"))
+    h = base.shape[0]
+    # compression 3 % of the diagonal: the mask is exactly 0 from 4 × 3 % of it (~22 % of a 3:2 height) past the line
+    gradient = {"gradient": {"rotation": 0, "offset": 40, "compression": 3}}
+    mid = server.add_masked_adjustment(raw, {"exposure_ev": 1}, gradient)["id"]
+    diff = np.abs(export_gray(raw, str(tmp_path / "b")) - base)
+    assert diff[:int(h * 0.4)].mean() > 5 and diff[int(h * 0.68):].max() == 0
+    # local contrast works in Lab: blending in RGB (scene) round-trips Lab → RGB → Lab, ±1 in a few pixels
+    server.update_masked_adjustment(raw, mid, {"exposure_ev": 0, "clarity": 60})
+    diff = np.abs(export_gray(raw, str(tmp_path / "c")) - base)
+    assert diff[:int(h * 0.4)].mean() > 1 and diff[int(h * 0.68):].max() <= 1
+    assert (diff[int(h * 0.68):] > 0).mean() < 1e-3
+
+
+@pytest.mark.parametrize("orientation", [5, 6])  # the two portrait turns, forced with darktable's flip module
+def test_gradient_rotation_follows_portrait_orientation(raw, orientation, monkeypatch):
+    def flipped(state, xmp_text=server.xmp_text):
+        x, n = xmp_text(state), int(re.search(r'history_end="(\d+)"', xmp_text(state))[1])
+        flip = xmp_writer._ITEM.format(num=n, op="flip", ver=2, params=struct.pack("<i", orientation).hex(), name="",
+                                       blendop=xmp_writer._BLENDOP, prio=0, edited=0)
+        end = "    </rdf:Seq>\n   </darktable:history>"
+        return x.replace(f'history_end="{n}"', f'history_end="{n + 1}"').replace(end, flip + end)
+    monkeypatch.setattr(server, "xmp_text", flipped)
+    monkeypatch.setattr(xmp_writer, "raw_flip", lambda src: orientation)
+    mid = server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"rotation": 0, "compression": 3}})["id"]
+    m = np.asarray(Image.open(io.BytesIO(server.export_mask_preview(raw, mid, max_size=400)[1].data)), float)
+    q = m.shape[0] // 4
+    assert m.shape[0] > m.shape[1] and m[:q].mean() > 200 and m[-q:].mean() < 50
