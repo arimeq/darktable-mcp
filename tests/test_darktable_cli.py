@@ -3,6 +3,7 @@
 Run scripts/cloud-setup.sh first; it fetches darktable-cli and the samples into tests/data.
 """
 import io
+import json
 import re
 import shutil
 import struct
@@ -125,20 +126,28 @@ def test_gradient_leaves_far_side_untouched(raw, tmp_path):
     assert (diff[int(h * 0.68):] > 0).mean() < 1e-3
 
 
-@pytest.mark.parametrize("orientation", [5, 6])  # the two portrait turns, forced with darktable's flip module
-def test_gradient_rotation_follows_portrait_orientation(raw, orientation, monkeypatch):
-    def flipped(state, xmp_text=server.xmp_text):
-        x, n = xmp_text(state), int(re.search(r'history_end="(\d+)"', xmp_text(state))[1])
-        flip = xmp_writer._ITEM.format(num=n, op="flip", ver=2, params=struct.pack("<i", orientation).hex(), name="",
-                                       blendop=xmp_writer._BLENDOP, prio=0, edited=0)
-        end = "    </rdf:Seq>\n   </darktable:history>"
-        return x.replace(f'history_end="{n}"', f'history_end="{n + 1}"').replace(end, flip + end)
-    monkeypatch.setattr(server, "xmp_text", flipped)
-    monkeypatch.setattr(xmp_writer, "raw_flip", lambda src: orientation)
-    mid = server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"rotation": 0, "compression": 3}})["id"]
-    m = np.asarray(Image.open(io.BytesIO(server.export_mask_preview(raw, mid, max_size=400)[1].data)), float)
-    q = m.shape[0] // 4
-    assert m.shape[0] > m.shape[1] and m[:q].mean() > 200 and m[-q:].mean() < 50
+def set_orientation(raw: str, value: int) -> None:
+    """Set the EXIF Orientation tag in IFD0 of a TIFF-based RAW (CR2, ORF) in place."""
+    b = bytearray(server.Path(raw).read_bytes())
+    ifd = struct.unpack_from("<I", b, 4)[0]
+    e = next(ifd + 2 + 12 * i for i in range(struct.unpack_from("<H", b, ifd)[0])
+             if struct.unpack_from("<H", b, ifd + 2 + 12 * i)[0] == 0x112)
+    struct.pack_into("<H", b, e + 8, value)
+    server.Path(raw).write_bytes(b)
+
+
+@pytest.mark.parametrize("orientation", [1, 6, 8])  # landscape and both portrait turns, as the camera tags them
+def test_gradient_rotation_is_upright(raw, orientation):
+    set_orientation(raw, orientation)
+    mid = server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"offset": 25, "compression": 2}})["id"]
+    for rotation, side in ((0, "top"), (180, "bottom"), (-90, "right"), (90, "left")):
+        server.update_masked_adjustment(raw, mid, mask={"gradient": {"rotation": rotation, "offset": 25, "compression": 2}})
+        m = np.asarray(Image.open(io.BytesIO(server.export_mask_preview(raw, mid, max_size=400)[1].data)), float)
+        assert (m.shape[0] > m.shape[1]) == (orientation != 1)
+        m = {"top": m, "bottom": m[::-1], "left": m.T, "right": m.T[::-1]}[side]
+        n = m.shape[0]
+        # offset counts from the masked edge: full effect within the first 25 %, none past ~40 %
+        assert m[:int(n * 0.15)].mean() > 200 and m[int(n * 0.4):].mean() < 20, (rotation, side)
 
 
 def test_region_preview_renders_at_full_resolution(raw):
@@ -170,3 +179,30 @@ def test_export_overwrite_replaces_named_output(raw, tmp_path):
     server.apply_adjustments(raw, exposure_ev=1)
     r = server.export_image(raw, output_directory=str(tmp_path), max_dimension=200, overwrite=True)
     assert r["output_path"] == first and r["rendered_via"] == "darktable-cli"
+
+
+def test_masks_saved_in_sensor_frame_keep_their_place(raw):
+    set_orientation(raw, 6)  # portrait: darktable turns the sensor frame 90° clockwise
+    mid = server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"offset": 25, "compression": 2}})["id"]
+    sidecar = server.Path(raw).with_name(server.Path(raw).stem + ".mcp.json")
+    old = json.loads(sidecar.read_text())
+    del old["version"]
+    old["masked"][0]["mask"]["gradient"]["rotation"] = 90  # sensor's left = top of the upright image
+    sidecar.write_text(json.dumps(old))
+    m = np.asarray(Image.open(io.BytesIO(server.export_mask_preview(raw, mid, max_size=400)[1].data)), float)
+    assert m[:int(m.shape[0] * 0.15)].mean() > 200 and m[int(m.shape[0] * 0.4):].mean() < 20
+    assert server.list_masked_adjustments(raw)["masked"][0]["mask"]["gradient"]["rotation"] == 0
+
+
+def test_export_edges_have_no_black_blocks(raw, tmp_path):
+    # the crop match_crop_to_jpeg set on P8192711, whose export had black blocks along the bottom on the user's PC
+    server.apply_adjustments(raw, exposure_ev=-0.3, contrast=30, highlights=-50, shadows=20, clarity=15)
+    server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"offset": 40, "compression": 3},
+                                                        "feathering_radius": 30})
+    server.crop_image(raw, left=0, top=0.001337, right=1, bottom=0.901070)
+    a = np.asarray(Image.open(server.export_image(raw, output_directory=str(tmp_path))["output_path"]).convert("RGB"))
+    black = a.max(axis=2) <= 2
+    # dark scenes have stray black pixels, a block is a column of them through the outer 8 px
+    assert {side: int(z[:8].all(axis=0).sum()) for side, z in
+            dict(top=black, bottom=black[::-1], left=black.T, right=black.T[::-1]).items()} == dict.fromkeys(
+        ("top", "bottom", "left", "right"), 0)
