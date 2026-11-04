@@ -15,6 +15,9 @@ dependencies = [
     "piexif>=1.1.3",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.scripts]
 darktable-mcp = "darktable_mcp:main"
 
