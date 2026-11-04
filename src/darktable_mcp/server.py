@@ -7,14 +7,15 @@ import os
 import shutil
 import subprocess
 import tempfile
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from .edits import CropState, EditState, GraduatedState
+from .edits import CropState, EditState, GraduatedState, MaskedAdjustment, MaskState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import foreign_edits, foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
+from .xmp_writer import MASKABLE, foreign_edits, foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
 
 mcp = MCPServer("DarktableMCP")
 
@@ -465,6 +466,162 @@ def graduated_filter(
     return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
 
 
+_MASK_DOC = """
+    Masked adjustment: an extra darktable instance of each module the adjustments map to, blended through its
+    own mask (drawn & parametric, blend colour space RGB (scene)), on top of the global edit.
+
+    adjustments : dict
+        Same names and scales as apply_adjustments: exposure_ev, black_level, contrast, highlights, shadows,
+        saturation, vibrance, clarity, sharpness, dehaze_strength, dehaze_distance.  exposure_ev here is
+        relative to the image the instance receives (no +0.7 EV default).
+    mask : dict, any combination of (all present parts must match: drawn × parametric):
+        gradient : {rotation, offset, compression}
+            Drawn gradient on the full uncropped frame (sensor orientation: portrait shots are turned).
+            rotation in darktable's degrees: 0 = mask on the top, 90 = left, -90 = right, 180 = bottom.
+            offset = % position of the transition line from that edge (50 = centre).  compression = transition
+            width in % (darktable default 50 = very soft, the whole frame; 5–15 = short transition).
+        luminance : [from, full_from, full_to, to]
+            darktable's "g" (gray) slider in %: the mask is 0 below *from*, rises to 1 at *full_from*, stays 1
+            to *full_to* and falls to 0 at *to*; 100 as the last two = no upper limit.  Linear values of the
+            module's INPUT: before the tone mapper (exposure, shadows/highlights, contrast, saturation,
+            vibrance, dehaze) middle grey is ~18 and highlights/clouds are often 50–200+; after it (clarity,
+            sharpness) the range is display-referred 0–100.
+        hue : [from, full_from, full_to, to]
+            darktable's "hz" (JzCzhz hue) slider in degrees.  Approximate: red 40, orange/skin 60, yellow 100,
+            green/foliage 120–135, cyan 205, sky/blue 250–260, magenta 320.  from > to wraps through 0 (reds).
+        chroma : [from, full_from, full_to, to]
+            darktable's "Cz" slider as shown (0 = grey, about 0.2+ = saturated, default boost).
+        invert : bool — invert the whole mask.
+        feathering_radius : px, 0–250, guided filter that makes the mask follow image edges (the key to
+            invisible transitions on parametric masks; try 10–50).
+        feathering_guide : "input after blur" (default), "input before blur", "output after blur",
+            "output before blur".
+        blur_radius : px, 0–100, Gaussian blur of the mask.
+        opacity : %, 0–100, strength of the whole masked adjustment.
+        contrast, brightness : %, -100 to 100, darktable's "mask contrast" and "mask opacity" refinement.
+    Check the mask with export_mask_preview before judging the result.
+"""
+
+
+def _masked_reply(path: Path, state: EditState, m: MaskedAdjustment) -> dict:
+    return {"status": "ok", "id": m.id, "masked_adjustment": state.to_dict()["masked"][state.masked.index(m)]} \
+        | _darktable_notes(path, state)
+
+
+def _set_masked(m: MaskedAdjustment, adjustments: Optional[dict], mask: Optional[dict]) -> Optional[str]:
+    """Merge *adjustments* / *mask* into *m*; an error message if a name or value is not accepted."""
+    if bad := [k for k in adjustments or {} if k not in MASKABLE]:
+        return f"Not maskable: {bad}. Use: {list(MASKABLE)}"
+    try:
+        new_mask = MaskState(**({**asdict(m.mask), **mask} if mask else asdict(m.mask)))
+    except TypeError as e:
+        return f"Invalid mask: {e}"
+    if new_mask.feathering_guide not in ("input after blur", "input before blur", "output after blur",
+                                         "output before blur"):
+        return f"Invalid feathering_guide: {new_mask.feathering_guide}"
+    if any(r is not None and len(r) != 4 for r in (new_mask.luminance, new_mask.hue, new_mask.chroma)):
+        return "luminance, hue and chroma take four values: [from, full_from, full_to, to]"
+    m.adjustments |= adjustments or {}
+    m.mask = new_mask
+    return None
+
+
+def add_masked_adjustment(image_path: str, adjustments: dict, mask: dict, label: Optional[str] = None) -> dict:
+    """Apply adjustments only where a mask selects (e.g. clarity in the sky only, saturation of blues only).
+
+    Returns the new adjustment's *id* for update/remove/export_mask_preview.  *label* names the instance in
+    darktable (default: the id).
+    """
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    mid = f"m{max([int(m.id[1:]) for m in state.masked] + [0]) + 1}"
+    m = MaskedAdjustment(mid, label or mid, {}, MaskState())
+    if err := _set_masked(m, adjustments, mask):
+        return {"error": err}
+    state.masked.append(m)
+    state.save()
+    return _masked_reply(path, state, m)
+
+
+add_masked_adjustment.__doc__ += _MASK_DOC
+mcp.tool()(add_masked_adjustment)
+
+
+def update_masked_adjustment(image_path: str, id: str, adjustments: Optional[dict] = None,
+                             mask: Optional[dict] = None, label: Optional[str] = None) -> dict:
+    """Change a masked adjustment: only the adjustments and mask fields you pass change (a mask "gradient"
+    is replaced whole; pass "gradient": null to drop it)."""
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    if not (m := next((m for m in state.masked if m.id == id), None)):
+        return {"error": f"No masked adjustment {id!r}", "ids": [m.id for m in state.masked]}
+    if err := _set_masked(m, adjustments, mask):
+        return {"error": err}
+    m.label = label or m.label
+    state.save()
+    return _masked_reply(path, state, m)
+
+
+update_masked_adjustment.__doc__ += _MASK_DOC
+mcp.tool()(update_masked_adjustment)
+
+
+@mcp.tool()
+def remove_masked_adjustment(image_path: str, id: str) -> dict:
+    """Delete a masked adjustment."""
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    state.masked = [m for m in state.masked if m.id != id]
+    state.save()
+    return {"status": "ok", "masked": state.to_dict()["masked"]}
+
+
+@mcp.tool()
+def list_masked_adjustments(image_path: str) -> dict:
+    """List the masked adjustments of an image (id, label, adjustments, mask)."""
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    return {"masked": state.to_dict()["masked"]}
+
+
+@mcp.tool()
+def export_mask_preview(image_path: str, id: Optional[str] = None, max_size: int = 1200) -> list:
+    """Render the masks darktable computes (white = full effect), one image per module instance, at the
+    output crop.  *id*: only that masked adjustment's masks (default: all of them)."""
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return [f"Error: {e}"]
+    if path.suffix.lower() not in RAW_EXTENSIONS or not DARKTABLE_CLI:
+        return ["Error: mask previews need darktable-cli and a RAW file"]
+    from PIL import Image as PILImage, ImageSequence
+    labels = [m.label for m in state.masked if id in (None, m.id)]
+    with tempfile.TemporaryDirectory() as tmp:
+        dst = Path(tmp, "masks.tif")
+        result = _export_via_darktable_cli(path, dst, _render_xmp(path, state, tmp, False), 90, max_size, True)
+        if result["status"] != "ok":
+            return [f"Error: darktable-cli failed: {result}"]
+        out = []
+        with PILImage.open(dst) as tif:
+            # darktable names each mask layer "<module> • <instance name>" (TIFF PageName, UTF-8)
+            for page in ImageSequence.Iterator(tif):
+                name = page.tag_v2.get(285, "").encode("latin-1").decode("utf-8", "replace")
+                if any(name.endswith(f"\u2022 {label}") for label in labels):
+                    buf = io.BytesIO()
+                    page.convert("L").save(buf, format="JPEG", quality=90)
+                    out += [f"Mask: {name}", Image(data=buf.getvalue(), format="jpeg")]
+    return out or [f"No mask found for {id or 'any masked adjustment'}" + (
+        "; the sidecar holds the user's own darktable edits, rendered as-is" if foreign_edits(path) else "")]
+
+
 @mcp.tool()
 def rename_output(image_path: str, new_name: str) -> dict:
     """Set the output filename stem (without extension) for the exported image.
@@ -595,7 +752,7 @@ def export_image(
 
 
 def _export_via_darktable_cli(
-    src: Path, dst: Path, xmp: Optional[Path], quality: int, max_dimension: Optional[int]
+    src: Path, dst: Path, xmp: Optional[Path], quality: int, max_dimension: Optional[int], masks: bool = False
 ) -> dict:
     # Throwaway configdir seeded with the user's darktablerc (workflow) and data.db (presets/styles);
     # in-memory library so the user's library.db is never touched.
@@ -607,7 +764,7 @@ def _export_via_darktable_cli(
         size = str(max_dimension or 0)
         # darktable-cli drops backslashes, so pass forward-slash paths
         cmd = [DARKTABLE_CLI, src.as_posix(), *([xmp.as_posix()] if xmp else []), dst.as_posix(),
-               "--width", size, "--height", size, "--hq", "true",
+               "--width", size, "--height", size, "--hq", "true", "--export_masks", str(masks).lower(),
                "--core", "--configdir", Path(cfg).as_posix(), "--library", ":memory:",
                "--conf", f"plugins/imageio/format/jpeg/quality={quality}"]
         try:
@@ -667,7 +824,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments, crop, graduated filter) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter, masked adjustments) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -678,10 +835,12 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     except FileNotFoundError as e:
         return {"error": str(e)}
 
-    from dataclasses import replace, asdict
+    from copy import deepcopy
+    from dataclasses import replace
     tgt_state.adjustments = replace(src_state.adjustments)
     tgt_state.crop = replace(src_state.crop) if src_state.crop else None
     tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None
+    tgt_state.masked = deepcopy(src_state.masked)
     tgt_state.save()
 
     return {"status": "ok", "copied_to": str(tgt_path), "edits": tgt_state.to_dict()}
