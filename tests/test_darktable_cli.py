@@ -55,6 +55,7 @@ def test_exposure_brightens_render(raw, tmp_path):
 
 def test_darktable_accepts_every_written_module(raw, tmp_path):
     server.apply_adjustments(raw, exposure_ev=0.5, contrast=0.3, black_level=0.01)
+    server.tone_mapper(raw, contrast=1.8, skew=-0.2, white_target=95, hue_preservation=80)
     server.export_image(raw, output_directory=str(tmp_path / "out"), max_dimension=200)
     ops = re.findall(r'darktable:operation="(\w+)"', xmp_sidecar_path(server.Path(raw)).read_text())
     assert ops
@@ -206,3 +207,14 @@ def test_export_edges_have_no_black_blocks(raw, tmp_path):
     assert {side: int(z[:8].all(axis=0).sum()) for side, z in
             dict(top=black, bottom=black[::-1], left=black.T, right=black.T[::-1]).items()} == dict.fromkeys(
         ("top", "bottom", "left", "right"), 0)
+
+
+def test_tone_mapper_replaces_the_workflow_sigmoid(raw, tmp_path):
+    base = export_gray(raw, str(tmp_path / "a"))
+    server.tone_mapper(raw)  # darktable's defaults: must replace the auto-applied instance, not stack on it
+    assert np.abs(export_gray(raw, str(tmp_path / "b")) - base).max() <= 1
+    server.tone_mapper(raw, contrast=2.5)
+    punchy = export_gray(raw, str(tmp_path / "c"))
+    assert punchy.std() > base.std() * 1.1
+    server.tone_mapper(raw, contrast=1.5, white_target=70)
+    assert np.percentile(export_gray(raw, str(tmp_path / "d")), 99) < np.percentile(base, 99) - 5

@@ -316,6 +316,13 @@ def xmp_text(edit_state: EditState) -> str:
         # graduatednd v1: density, hardness, rotation, offset, hue 0–1, saturation 0–1
         params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)
         mods.append(("graduatednd", 1, params.hex(), "", _BLENDOP_SCENE, 0))
+    if t := edit_state.sigmoid:
+        # sigmoid v3: contrast, skew, white/black target, per-channel processing, hue preservation, primaries
+        # insets/rotations 0, purity 0, working-profile primaries = darktable's defaults. Same multi_name as the
+        # instance the sigmoid workflow auto-applies, so this one replaces it.
+        params = struct.pack("<4fif6ffi", t.contrast, t.skew, t.white_target, t.black_target, 0, t.hue_preservation,
+                             *[0.0] * 6, 0.0, 0)
+        mods.append(("sigmoid", 3, params.hex(), _SCENE_DEFAULT, _BLENDOP_SCENE, 0))
     forms, instances = [], {}
     flip = raw_flip(edit_state.source_path) if any(m.mask.gradient for m in edit_state.masked) else 0
     for n, m in enumerate(edit_state.masked):

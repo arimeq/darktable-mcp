@@ -13,7 +13,7 @@ from typing import Optional
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from .edits import CropState, EditState, GraduatedState, MaskedAdjustment, MaskState
+from .edits import CropState, EditState, GraduatedState, SigmoidState, MaskedAdjustment, MaskState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
 from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_flip,
                          xmp_sidecar_path, xmp_text)
@@ -509,6 +509,45 @@ def graduated_filter(
     return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
 
 
+@mcp.tool()
+def tone_mapper(
+    image_path: str,
+    contrast: Optional[float] = None,
+    skew: Optional[float] = None,
+    white_target: Optional[float] = None,
+    black_target: Optional[float] = None,
+    hue_preservation: Optional[float] = None,
+    reset: bool = False,
+) -> dict:
+    """darktable sigmoid, the tone mapper of the user's scene-referred (sigmoid) workflow, in its GUI's units.
+
+    Only the parameters you supply change, starting from darktable's own default; *reset* goes back to it.
+    Punch through the tone mapper rolls highlights off smoothly, where apply_adjustments' contrast (color
+    balance rgb, before the tone mapper) pushes bright frames into clipping.
+
+    contrast : float
+        Middle grey contrast (darktable default 1.5, slider soft range 0.7–3).  1.7–2.0 = punchy "summer day".
+    skew : float
+        -1 to 1 (default 0): negative leaves more room for highlights (softer roll-off, brighter shadows),
+        positive for shadows (deeper shadows, highlights reach white sooner).
+    white_target, black_target : float
+        Display white / black in % (defaults 100 and 0.0152).  white < 100 dims the brightest tones.
+    hue_preservation : float
+        % (default 100).  Lower lets very bright saturated colours shift towards white/yellow, like film.
+    """
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    state.sigmoid = None if reset else state.sigmoid or SigmoidState()
+    if state.sigmoid:
+        state.sigmoid.__dict__.update({k: float(v) for k, v in {
+            "contrast": contrast, "skew": skew, "white_target": white_target, "black_target": black_target,
+            "hue_preservation": hue_preservation}.items() if v is not None})
+    state.save()
+    return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
+
+
 _MASK_DOC = """
     Masked adjustment: an extra darktable instance of each module the adjustments map to, blended through its
     own mask (drawn & parametric, blend colour space RGB (scene)), on top of the global edit.
@@ -951,7 +990,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments, crop, graduated filter, masked adjustments) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, masked adjustments) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -966,6 +1005,7 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     tgt_state.adjustments = replace(src_state.adjustments)
     tgt_state.crop = replace(src_state.crop) if src_state.crop else None
     tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None
+    tgt_state.sigmoid = replace(src_state.sigmoid) if src_state.sigmoid else None
     tgt_state.masked = deepcopy(src_state.masked)
     tgt_state.save()
 

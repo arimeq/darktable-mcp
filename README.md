@@ -142,6 +142,7 @@ Claude will:
 | `crop_image` | Crop by coordinates or aspect ratio |
 | `rotate_image` | Rotate / straighten |
 | `reset_crop` | Remove crop, restore full frame |
+| `tone_mapper` | darktable sigmoid: contrast, skew, target white/black, hue preservation |
 | `graduated_filter` | Graduated ND filter (darktable graduated density): darken/tint one side, e.g. the sky |
 | `add_masked_adjustment` | Adjustments only where a mask selects: drawn gradient and/or luminance, hue, chroma ranges |
 | `update_masked_adjustment`, `remove_masked_adjustment`, `list_masked_adjustments` | Manage masked adjustments |
@@ -179,7 +180,7 @@ When `darktable-cli` is installed, RAW previews, histograms and exports are all 
 | temperature, tint | color calibration (CAT tab illuminant) |
 | shadows, highlights | tone equalizer |
 | saturation, vibrance | color balance rgb (global chroma, global vibrance) |
-| tone mapper | none written: darktable applies the one your workflow uses (sigmoid, filmic or AgX) |
+| tone mapper | none written unless `tone_mapper` is used: darktable applies the one your workflow uses; `tone_mapper` writes sigmoid (v3), replacing the instance the sigmoid workflow auto-applies |
 | contrast | color balance rgb (contrast) |
 | clarity | local contrast |
 | dehaze | haze removal |
