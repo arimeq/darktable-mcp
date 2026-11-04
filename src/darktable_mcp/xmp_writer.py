@@ -10,8 +10,9 @@ import re
 import struct
 from pathlib import Path
 from typing import Optional
+from xml.sax.saxutils import escape
 
-from .edits import AdjustmentState, EditState
+from .edits import AdjustmentState, EditState, GradientMask, MaskState
 
 _BLENDOP = "gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="
 # Blending off, blend colour space "RGB (scene)" as darktable assigns to scene-referred RGB modules.
@@ -43,9 +44,9 @@ _HEADER = """\
    darktable:raw_params="0"
    darktable:auto_presets_applied="0"
    darktable:history_end="{end}"
-   darktable:iop_order_version="4">
+   darktable:iop_order_version="4"{order}>
    <darktable:masks_history>
-    <rdf:Seq/>
+    {masks}
    </darktable:masks_history>
    <darktable:history>
     <rdf:Seq>
@@ -64,12 +65,35 @@ _ITEM = """\
       darktable:modversion="{ver}"
       darktable:params="{params}"
       darktable:multi_name="{name}"
-      darktable:multi_name_hand_edited="0"
-      darktable:multi_priority="0"
+      darktable:multi_name_hand_edited="{edited}"
+      darktable:multi_priority="{prio}"
       darktable:blendop_version="14"
       darktable:blendop_params="{blendop}"/>
 """
 
+
+_MASK = """\
+     <rdf:li
+      darktable:mask_num="{num}"
+      darktable:mask_id="{id}"
+      darktable:mask_type="{type}"
+      darktable:mask_name="{name}"
+      darktable:mask_version="6"
+      darktable:mask_points="{points}"
+      darktable:mask_nb="{nb}"
+      darktable:mask_src="0000000000000000"/>
+"""
+
+# iop_order.c v50_order: the stock pipe order of iop_order_version 4
+_V50_ORDER = """\
+rawprepare invert temperature rasterfile highlights cacorrect hotpixels rawdenoise demosaic denoiseprofile bilateral
+rotatepixels scalepixels lens cacorrectrgb hazeremoval ashift flip enlargecanvas overlay clipping liquify spots retouch
+exposure mask_manager tonemap toneequal crop graduatednd profile_gamma equalizer colorin channelmixerrgb diffuse
+censorize negadoctor blurs primaries nlmeans colorchecker neutral defringe atrous lowpass highpass sharpen colortransfer
+colormapping channelmixer basicadj colorharmonizer colorbalance colorequal colorbalancergb rgbcurve rgblevels basecurve
+filmic sigmoid agx filmicrgb lut3d colisa tonecurve levels shadhi zonesystem globaltonemap relight bilat
+colorcorrection colorcontrast velvia vibrance colorzones bloom colorize lowlight monochrome grain soften splittoning
+vignette colorreconstruct finalscale colorout clahe overexposed rawoverexposed dither borders watermark gamma"""
 
 _UNMAPPED = ("highlight_recovery", "shadow_lift", "brightness", "whites", "blacks", "vignette")
 
@@ -190,15 +214,19 @@ def foreign_edits(src: Path) -> bool:
     return bool(m and int(m.group(1)))
 
 
-def xmp_text(edit_state: EditState) -> str:
-    adj, crop = edit_state.adjustments, edit_state.crop
+def _modules(adj: AdjustmentState, masked: bool = False) -> list[tuple[str, int, str, str, str]]:
+    """(operation, modversion, params hex, multi_name, blendop) for the adjustments that are set.
+
+    *masked*: an extra instance on top of the global edit, so exposure is relative to the pipe it receives
+    instead of replacing darktable's default instance.
+    """
     mods: list[tuple[str, int, str, str, str]] = []
     if adj.exposure_ev or adj.black_level:
         # Replaces darktable's auto-applied instance (same multi_name) but keeps its values at 0, so our values are
         # relative to darktable's default. Last two ints: compensate camera exposure bias, highlight preservation.
         # darktable's black slider spans ±0.1 and 0.01 already crushes shadows visibly, so scale the 0–0.5 range down
-        params = struct.pack("<i4f2i", 0, _DT_DEFAULT_BLACK + adj.black_level / 10,
-                             _DT_DEFAULT_EXPOSURE + adj.exposure_ev, 50, -4, 1, 1)
+        black, ev = (0.0, 0.0) if masked else (_DT_DEFAULT_BLACK, _DT_DEFAULT_EXPOSURE)
+        params = struct.pack("<i4f2i", 0, black + adj.black_level / 10, ev + adj.exposure_ev, 50, -4, int(not masked), 1)
         mods.append(("exposure", 7, params.hex(), _SCENE_DEFAULT, _BLENDOP_SCENE))
     if adj.dehaze_strength:
         # hazeremoval v3: strength, distance, compatibility_mode=FALSE, adaptive=TRUE (5.6.1 defaults)
@@ -210,10 +238,6 @@ def xmp_text(edit_state: EditState) -> str:
                      _SCENE_DEFAULT, _BLENDOP_SCENE))
     if adj.shadows or adj.highlights:
         mods.append(("toneequal", 2, _tone_equalizer(adj.shadows, adj.highlights).hex(), "", _BLENDOP_SCENE))
-    if g := edit_state.graduated:
-        # graduatednd v1: density, hardness, rotation, offset, hue 0–1, saturation 0–1
-        params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)
-        mods.append(("graduatednd", 1, params.hex(), "", _BLENDOP_SCENE))
     if adj.saturation or adj.vibrance or adj.contrast:
         params = _color_balance(adj.saturation, adj.vibrance, adj.contrast)
         mods.append(("colorbalancergb", 5, params.hex(), "", _BLENDOP_SCENE))
@@ -223,13 +247,88 @@ def xmp_text(edit_state: EditState) -> str:
         mods.append(("sharpen", 1, struct.pack("<3f", 2.0, adj.sharpness / 100, 0.5).hex(), "", _BLENDOP))
     if adj.noise_reduction > 0:
         mods.append(("denoiseprofile", 12, _DENOISE_CHROMA, "", _BLENDOP))
-    if crop:
+    return mods
+
+
+# Adjustments a masked instance can take: a second white balance CAT or denoise (camera RGB) would not make sense.
+MASKABLE = ("exposure_ev", "black_level", "contrast", "highlights", "shadows", "saturation", "vibrance",
+            "sharpness", "clarity", "dehaze_strength", "dehaze_distance")
+
+_GUIDES = {"output before blur": 2, "input before blur": 1, "output after blur": 6, "input after blur": 5}
+# blend.c _blend_init_blendif_boost_parameters: RGB (scene) Jz/Cz in/out start at log2(0.001)... offset by the GUI
+_BOOST = [0.0] * 8 + [-6.64385619] * 2 + [0.0] * 2 + [-6.64385619] * 2 + [0.0] * 2
+
+
+def _blendop_masked(mask: MaskState, group_id: int) -> str:
+    """dt_develop_blend_params_t v14 (blend.h): normal blend in RGB (scene) through a drawn and/or parametric mask.
+
+    Parametric ranges are the GUI's four markers on the input channels g (gray, %), Cz (chroma) and hz (hue, °);
+    a channel's stored value is shown / 100 / 2^boost (blend_gui.c _blendif_scale_print_default). A range whose
+    first marker is above its last wraps around: the complementary range with the channel's polarity inverted.
+    """
+    params, blendif = [0.0, 0.0, 1.0, 1.0] * 16, 0
+    for ch, r, scale in ((0, mask.luminance, 100), (9, mask.chroma, 100), (10, mask.hue, 360)):
+        if r:
+            if r[0] > r[3]:
+                r, blendif = [*r[2:], *r[:2]], blendif | 1 << (ch + 16)
+            blendif |= 1 << ch
+            params[4 * ch:4 * ch + 4] = [v / scale / 2 ** _BOOST[ch] for v in r]
+    # mask_mode: enabled | drawn | parametric; mask_combine: exclusive (drawn × parametric), inverted
+    mode = 1 | (2 if group_id else 0) | (4 if blendif else 0)
+    return struct.pack("<3I2f3IfI4fI2I64f16f20s3i", mode, 4, 24, 0.0, mask.opacity, int(mask.invert), group_id,
+                       blendif, mask.feathering_radius, _GUIDES[mask.feathering_guide], mask.blur_radius,
+                       mask.contrast / 100, mask.brightness / 100, 0.0, 1, 0, 0, *params, *_BOOST,
+                       b"", 0, -1, 0).hex()
+
+
+def _gradient_points(g: GradientMask) -> bytes:
+    """dt_masks_point_gradient_t (masks.h): anchor x/y, rotation, compression, steepness, curvature, state.
+
+    Coordinates are normalised to the full uncropped frame. gradient.c: at rotation r the mask rises towards
+    (-sin r, -cos r), so the anchor sits *offset* % from that edge. Sigmoidal state, as the GUI creates it.
+    """
+    d, r = (50 - g.offset) / 100, math.radians(g.rotation)
+    return struct.pack("<6fi", 0.5 - d * math.sin(r), 0.5 - d * math.cos(r), g.rotation, g.compression / 100,
+                       0.0, 0.0, 2)
+
+
+def xmp_text(edit_state: EditState) -> str:
+    mods = [(*m, 0) for m in _modules(edit_state.adjustments)]
+    if g := edit_state.graduated:
+        # graduatednd v1: density, hardness, rotation, offset, hue 0–1, saturation 0–1
+        params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)
+        mods.append(("graduatednd", 1, params.hex(), "", _BLENDOP_SCENE, 0))
+    forms, instances = [], {}
+    for n, m in enumerate(edit_state.masked):
+        gradient_id = 2000 + n if m.mask.gradient else 0
+        if gradient_id:
+            forms.append((gradient_id, 16, f"gradient #{n + 1}", _gradient_points(m.mask.gradient).hex(), 1))
+        for op, ver, params, _, _ in _modules(AdjustmentState(**m.adjustments), masked=True):
+            group_id = 0
+            if gradient_id:
+                # one group per module instance, as the GUI makes; state show | use
+                group_id = 1000 + len(forms)
+                forms.append((group_id, 4, f"grp {op} {m.label}", struct.pack("<3if", gradient_id, group_id, 3, 1.0).hex(), 1))
+            instances[op] = instances.get(op, 0) + 1
+            mods.append((op, ver, params, escape(m.label, {'"': "&quot;"}), _blendop_masked(m.mask, group_id), instances[op]))
+    if crop := edit_state.crop:
         # crop v3: left, top, right, bottom (normalised), ratio_d/ratio_n 0 = freehand
         params = struct.pack("<4f2i", crop.left, crop.top, crop.right, crop.bottom, 0, 0)
-        mods.append(("crop", 3, params.hex(), "", _BLENDOP))
+        mods.append(("crop", 3, params.hex(), "", _BLENDOP, 0))
 
     items = "".join(
-        _ITEM.format(num=i, op=op, ver=ver, params=p, name=name, blendop=b)
-        for i, (op, ver, p, name, b) in enumerate(mods)
+        _ITEM.format(num=i, op=op, ver=ver, params=p, name=name, blendop=b, prio=prio, edited=int(prio > 0))
+        for i, (op, ver, p, name, b, prio) in enumerate(mods)
     )
-    return _HEADER.format(source=edit_state.source_path.name, end=len(mods), items=items)
+    # darktable's history merge shifts history nums but not mask nums; attached to any one entry, the forms
+    # become the current set (masks.c dt_masks_read_masks_history), so the last entry is safe.
+    masks = "".join(_MASK.format(num=len(mods) - 1, id=i, type=t, name=escape(nm, {'"': "&quot;"}), points=pts, nb=nb)
+                    for i, t, nm, pts, nb in forms)
+    # Extra instances have no place in the stock v5.0 order: darktable drops them unless the XMP lists them
+    # (exif.cc reads iop_order_list, develop.c skips history whose iop_order is INT_MAX). Each goes right after
+    # its base instance, like the GUI's "new instance".
+    order = "".join(f",{op},0" + "".join(f",{op},{i}" for i in range(1, instances.get(op, 0) + 1))
+                    for op in _V50_ORDER.split())[1:]
+    return _HEADER.format(source=edit_state.source_path.name, end=len(mods), items=items,
+                          masks=f"<rdf:Seq>\n{masks}    </rdf:Seq>" if masks else "<rdf:Seq/>",
+                          order=f'\n   darktable:iop_order_list="{order}"' if instances else "")

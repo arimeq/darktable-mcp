@@ -27,6 +27,46 @@ class GraduatedState:
 
 
 @dataclass
+class GradientMask:
+    """darktable drawn gradient mask, placed on the full uncropped frame."""
+    rotation: float = 0.0      # degrees, as darktable stores it: 0 = mask on top, 90 = left, 180 = bottom
+    offset: float = 50.0       # % position of the transition line, from the edge the mask covers
+    compression: float = 50.0  # %, darktable's default 50; small = short, hard transition
+
+
+@dataclass
+class MaskState:
+    """darktable drawn and/or parametric mask (blend-if, RGB (scene)), in the units its GUI shows."""
+    gradient: Optional[GradientMask] = None
+    luminance: Optional[list[float]] = None  # "g" (gray) slider, %: [from, full from, full to, to]
+    hue: Optional[list[float]] = None        # "hz" slider, degrees; from > to wraps through 0
+    chroma: Optional[list[float]] = None     # "Cz" slider as shown (0–1 at default boost)
+    invert: bool = False
+    feathering_radius: float = 0.0  # px
+    feathering_guide: str = "input after blur"
+    blur_radius: float = 0.0        # px
+    opacity: float = 100.0          # %
+    contrast: float = 0.0           # mask contrast, %
+    brightness: float = 0.0         # "mask opacity" refinement slider, %
+
+    def __post_init__(self):
+        if isinstance(self.gradient, dict):
+            self.gradient = GradientMask(**self.gradient)
+
+
+@dataclass
+class MaskedAdjustment:
+    id: str
+    label: str
+    adjustments: dict  # AdjustmentState field -> value
+    mask: MaskState
+
+    def __post_init__(self):
+        if isinstance(self.mask, dict):
+            self.mask = MaskState(**self.mask)
+
+
+@dataclass
 class AdjustmentState:
     # --- Exposure ---
     exposure_ev: float = 0.0          # stops, -5 to +5
@@ -67,6 +107,7 @@ class EditState:
     adjustments: AdjustmentState = field(default_factory=AdjustmentState)
     crop: Optional[CropState] = None
     graduated: Optional[GraduatedState] = None
+    masked: list[MaskedAdjustment] = field(default_factory=list)
     output_name: Optional[str] = None  # stem only, no extension
 
     # ------------------------------------------------------------------
@@ -92,6 +133,7 @@ class EditState:
         crop_data = data.get("crop")
         state.crop = CropState(**crop_data) if crop_data else None
         state.graduated = GraduatedState(**data["graduated"]) if data.get("graduated") else None
+        state.masked = [MaskedAdjustment(**m) for m in data.get("masked", [])]
         state.output_name = data.get("output_name")
         return state
 
@@ -123,6 +165,7 @@ class EditState:
             a.dehaze_strength != defaults.dehaze_strength,
             self.crop is not None,
             self.graduated is not None,
+            bool(self.masked),
             self.output_name is not None,
         ])
 
@@ -131,5 +174,6 @@ class EditState:
             "adjustments": asdict(self.adjustments),
             "crop": asdict(self.crop) if self.crop else None,
             "graduated": asdict(self.graduated) if self.graduated else None,
+            "masked": [asdict(m) for m in self.masked],
             "output_name": self.output_name,
         }
