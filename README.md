@@ -140,6 +140,7 @@ Claude will:
 | `crop_image` | Crop by coordinates or aspect ratio |
 | `rotate_image` | Rotate / straighten |
 | `reset_crop` | Remove crop, restore full frame |
+| `graduated_filter` | Graduated ND filter (darktable graduated density): darken/tint one side, e.g. the sky |
 | `rename_output` | Set the export filename |
 | `export_image` | Export to JPEG / PNG / TIFF |
 | `reset_edits` | Undo everything, back to original |

@@ -210,6 +210,10 @@ def xmp_text(edit_state: EditState) -> str:
                      _SCENE_DEFAULT, _BLENDOP_SCENE))
     if adj.shadows or adj.highlights:
         mods.append(("toneequal", 2, _tone_equalizer(adj.shadows, adj.highlights).hex(), "", _BLENDOP_SCENE))
+    if g := edit_state.graduated:
+        # graduatednd v1: density, hardness, rotation, offset, hue 0–1, saturation 0–1
+        params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)
+        mods.append(("graduatednd", 1, params.hex(), "", _BLENDOP_SCENE))
     if adj.saturation or adj.vibrance or adj.contrast:
         params = _color_balance(adj.saturation, adj.vibrance, adj.contrast)
         mods.append(("colorbalancergb", 5, params.hex(), "", _BLENDOP_SCENE))

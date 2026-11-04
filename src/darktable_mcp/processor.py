@@ -1,6 +1,7 @@
 """Image processing pipeline using rawpy (for RAW) and Pillow (for all types)."""
 from __future__ import annotations
 
+import colorsys
 import math
 from pathlib import Path
 from typing import Optional
@@ -8,7 +9,7 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
 
-from .edits import EditState, AdjustmentState, CropState
+from .edits import EditState, AdjustmentState, CropState, GraduatedState
 
 RAW_EXTENSIONS = {".nef", ".cr2", ".cr3", ".arw", ".raf", ".rw2", ".dng", ".orf", ".pef", ".srw", ".3fr"}
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
@@ -132,6 +133,23 @@ def _apply_vignette(img: Image.Image, strength: float) -> Image.Image:
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
+def _apply_graduated(img: Image.Image, g: GraduatedState) -> Image.Image:
+    """darktable graduatednd process() in linear light, on the full uncropped frame like darktable."""
+    w, h = img.size
+    v = math.radians(g.rotation)  # deg2radf(-param rotation)
+    Y, X = np.mgrid[-1:1:h * 1j, -1:1:w * 1j]
+    hardness = (h / 2) / math.hypot(w / 2, h / 2) / (1 - (0.5 + g.hardness / 100 * 0.45)) * 0.5
+    length = (math.sin(v) * X - math.cos(v) * Y - 1 + g.offset / 50) * hardness
+    c = np.array(colorsys.hls_to_rgb(g.hue / 360, 0.5, g.saturation / 100), dtype=np.float32)
+    arr = (np.asarray(img, dtype=np.float32) / 255) ** 2.2
+    if g.density > 0:
+        arr /= c + (1 - c) * np.exp2(g.density * np.clip(0.5 + length, 0, 1))[..., None]
+    else:
+        c = 1 - c
+        arr *= c + (1 - c) * np.exp2(-g.density * np.clip(0.5 - length, 0, 1))[..., None]
+    return Image.fromarray((np.clip(arr, 0, 1) ** (1 / 2.2) * 255).astype(np.uint8))
+
+
 def _apply_clarity(img: Image.Image, clarity: float) -> Image.Image:
     """Local contrast via unsharp mask with a large radius."""
     if abs(clarity) < 1.0:
@@ -218,6 +236,8 @@ class ImageProcessor:
         else:
             img = self._process_raster(edit_state.adjustments)
 
+        if edit_state.graduated:
+            img = _apply_graduated(img, edit_state.graduated)
         img = self._apply_post_raw(img, edit_state.adjustments)
 
         if edit_state.crop:

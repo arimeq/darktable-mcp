@@ -12,7 +12,7 @@ from typing import Optional
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from .edits import CropState, EditState
+from .edits import CropState, EditState, GraduatedState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
 from .xmp_writer import foreign_edits, foreign_sidecar, ignored_by_darktable, xmp_sidecar_path, xmp_text
 
@@ -419,6 +419,53 @@ def reset_crop(image_path: str) -> dict:
 
 
 @mcp.tool()
+def graduated_filter(
+    image_path: str,
+    density: Optional[float] = None,
+    hardness: Optional[float] = None,
+    rotation: Optional[float] = None,
+    offset: Optional[float] = None,
+    hue: Optional[float] = None,
+    saturation: Optional[float] = None,
+    remove: bool = False,
+) -> dict:
+    """Graduated filter: darktable "graduated density", a simulated graduated ND filter (e.g. darken a bright sky).
+
+    Only the parameters you supply change; the first call starts from darktable's "neutral gray ND2 (soft)"
+    preset (density 1, hardness 0, rotation 0, offset 50).  *remove* deletes the filter.
+    The gradient is placed on the full uncropped frame, as in darktable.
+
+    density : float
+        -8 to +8 EV.  Positive darkens the side *rotation* points to; negative brightens the OPPOSITE side.
+        Not a full EV step: at the frame edge 1 EV gives about 0.67x, 2 EV 0.4x (×1.5 for -1 EV).
+    hardness : float
+        0 = soft (transition spans the whole frame) to 100 = hard edge (darktable presets use 0 or 75).
+    rotation : float
+        Degrees as darktable's slider shows them (-180 to 180): 0 = darkens the top, 90 = right, -90 = left,
+        180 = bottom.
+    offset : float
+        Position of the transition line in % (50 = through the centre; at rotation 0, % from the top edge).
+    hue, saturation : float
+        Tint of the filter: hue 0–360°, saturation 0–100 % (0 = neutral grey).  darktable's orange preset is
+        hue 37, saturation 80.
+    """
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+
+    if remove:
+        state.graduated = None
+    else:
+        state.graduated = state.graduated or GraduatedState()
+        state.graduated.__dict__.update({k: float(v) for k, v in {
+            "density": density, "hardness": hardness, "rotation": rotation, "offset": offset,
+            "hue": hue, "saturation": saturation}.items() if v is not None})
+    state.save()
+    return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
+
+
+@mcp.tool()
 def rename_output(image_path: str, new_name: str) -> dict:
     """Set the output filename stem (without extension) for the exported image.
 
@@ -620,7 +667,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments + crop) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -634,6 +681,7 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     from dataclasses import replace, asdict
     tgt_state.adjustments = replace(src_state.adjustments)
     tgt_state.crop = replace(src_state.crop) if src_state.crop else None
+    tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None
     tgt_state.save()
 
     return {"status": "ok", "copied_to": str(tgt_path), "edits": tgt_state.to_dict()}
