@@ -282,24 +282,32 @@ def _blendop_masked(mask: MaskState, group_id: int) -> str:
 
 
 def raw_flip(src: Path) -> int:
-    """LibRaw's flip, bit for bit darktable's dt_image_orientation_t (both from dcraw)."""
+    """The RAW's orientation as darktable's dt_image_orientation_t (common/image.h).
+
+    LibRaw's flip has the same bits except the two quarter turns, which are swapped: EXIF 6 (turn clockwise)
+    is LibRaw 6 but darktable 5 (ORIENTATION_ROTATE_CW_90_DEG).
+    """
     import rawpy
     with rawpy.imread(str(src)) as raw:
-        return raw.sizes.flip
+        return {5: 6, 6: 5}.get(raw.sizes.flip, raw.sizes.flip)
+
+
+# Degrees the sensor frame is turned against the upright image, per darktable orientation (5 = clockwise turn).
+TURN = {0: 0, 3: 180, 5: 90, 6: -90}
 
 
 def _gradient_points(g: GradientMask, flip: int) -> bytes:
     """dt_masks_point_gradient_t (masks.h): anchor x/y, rotation, compression, steepness, curvature, state.
 
     Coordinates are normalised to the full uncropped sensor frame, before darktable's flip turns it upright,
-    so the displayed rotation/anchor are mapped back by the RAW's orientation (checked with darktable's flip at
-    orientations 5 and 6). gradient.c: at rotation r the mask rises towards (-sin r, -cos r), so the anchor sits
+    so the displayed rotation/anchor are mapped back by the RAW's orientation (checked on RAWs tagged EXIF
+    orientation 6 and 8). gradient.c: at rotation r the mask rises towards (-sin r, -cos r), so the anchor sits
     *offset* % from that edge. Sigmoidal state, as the GUI creates it.
     """
     d, r = (50 - g.offset) / 100, math.radians(g.rotation)
     x, y = 0.5 - d * math.sin(r), 0.5 - d * math.cos(r)
-    (x, y), turn = {0: ((x, y), 0), 3: ((1 - x, 1 - y), 180), 5: ((y, 1 - x), 90), 6: ((1 - y, x), -90)}[flip]
-    return struct.pack("<6fi", x, y, g.rotation + turn, g.compression / 100, 0.0, 0.0, 2)
+    x, y = {0: (x, y), 3: (1 - x, 1 - y), 5: (y, 1 - x), 6: (1 - y, x)}[flip]
+    return struct.pack("<6fi", x, y, g.rotation + TURN[flip], g.compression / 100, 0.0, 0.0, 2)
 
 
 def xmp_text(edit_state: EditState) -> str:
