@@ -5,7 +5,8 @@ Użytkownik ma darktable **5.6.1** (Windows, workflow „scene-referred (sigmoid
 
 ## Środowisko i testy
 
-- Sesja w chmurze: `bash scripts/cloud-setup.sh` (darktable-cli 5.6.1 z AppImage, zależności, próbka RAW z Canona 450D).
+- Sesja w chmurze: zanim zaczniesz pracę, uruchom `bash scripts/cloud-setup.sh` (darktable-cli 5.6.1, jeśli setup
+  script środowiska go nie zainstalował; zależności; próbki RAW z Canona 450D i Olympusa E-M10 III).
 - `python -m pytest tests -q`: render przez prawdziwy darktable-cli i sprawdzenie, czy darktable wczytał każdy
   zapisany moduł bez odrzucenia (wersja i rozmiar parametrów z logu `-d params`).
 - Każdy nowy lub zmieniony moduł w `xmp_writer.py` dostaje test: XMP się wczytuje (wzór w
