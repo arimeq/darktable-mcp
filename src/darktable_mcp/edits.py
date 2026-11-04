@@ -36,6 +36,15 @@ class SigmoidState:
     hue_preservation: float = 100.0 # %
 
 
+@dataclass
+class LocalContrastState:
+    """darktable local contrast (local laplacian, its default mode), in the units its GUI shows; defaults = its."""
+    detail: float = 125.0        # %, 100 = unchanged
+    highlights: float = 50.0     # %, 0–200
+    shadows: float = 50.0        # %, 0–200
+    midtone_range: float = 0.5   # 0.001–1
+
+
 HUES = ("red", "orange", "yellow", "green", "cyan", "blue", "lavender", "magenta")
 
 
@@ -130,6 +139,7 @@ class EditState:
     graduated: Optional[GraduatedState] = None
     sigmoid: Optional[SigmoidState] = None
     color_eq: Optional[ColorEqualizerState] = None
+    local_contrast: Optional[LocalContrastState] = None
     masked: list[MaskedAdjustment] = field(default_factory=list)
     output_name: Optional[str] = None  # stem only, no extension
     # 2: gradient masks are upright (before: in the sensor's frame, which differs on portrait shots)
@@ -160,6 +170,7 @@ class EditState:
         state.graduated = GraduatedState(**data["graduated"]) if data.get("graduated") else None
         state.sigmoid = SigmoidState(**data["sigmoid"]) if data.get("sigmoid") else None
         state.color_eq = ColorEqualizerState(**data["color_eq"]) if data.get("color_eq") else None
+        state.local_contrast = LocalContrastState(**data["local_contrast"]) if data.get("local_contrast") else None
         state.masked = [MaskedAdjustment(**m) for m in data.get("masked", [])]
         state.output_name = data.get("output_name")
         state.version = data.get("version", 1)
@@ -195,6 +206,7 @@ class EditState:
             self.graduated is not None,
             self.sigmoid is not None,
             self.color_eq is not None,
+            self.local_contrast is not None,
             bool(self.masked),
             self.output_name is not None,
         ])
@@ -206,6 +218,7 @@ class EditState:
             "graduated": asdict(self.graduated) if self.graduated else None,
             "sigmoid": asdict(self.sigmoid) if self.sigmoid else None,
             "color_eq": asdict(self.color_eq) if self.color_eq else None,
+            "local_contrast": asdict(self.local_contrast) if self.local_contrast else None,
             "masked": [asdict(m) for m in self.masked],
             "output_name": self.output_name,
             "version": self.version,

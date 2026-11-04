@@ -57,6 +57,7 @@ def test_darktable_accepts_every_written_module(raw, tmp_path):
     server.apply_adjustments(raw, exposure_ev=0.5, contrast=0.3, black_level=0.01)
     server.tone_mapper(raw, contrast=1.8, skew=-0.2, white_target=95, hue_preservation=80)
     server.color_equalizer(raw, saturation={"green": 20}, hue={"red": 5}, brightness={"blue": -20})
+    server.local_contrast(raw, detail=140, highlights=30, shadows=70, midtone_range=0.4)
     server.export_image(raw, output_directory=str(tmp_path / "out"), max_dimension=200)
     ops = re.findall(r'darktable:operation="(\w+)"', xmp_sidecar_path(server.Path(raw)).read_text())
     assert ops
@@ -238,3 +239,16 @@ def test_color_equalizer_targets_one_hue(raw, tmp_path):
     server.color_equalizer(raw, reset=True)
     server.color_equalizer(raw, brightness=dict.fromkeys(own, -50))
     assert hsv("d")[..., 2][region].mean() < base[..., 2][region].mean() - 10
+
+
+def test_local_contrast_detail_sets_texture(raw, tmp_path):
+    def texture(name):
+        g = export_gray(raw, str(tmp_path / name))
+        return np.abs(np.diff(g, axis=1)).mean()  # fine structure: mean step between neighbours
+    base = texture("a")
+    server.local_contrast(raw)  # darktable's default, detail 125 %
+    default = texture("b")
+    server.local_contrast(raw, detail=200)
+    strong = texture("c")
+    server.local_contrast(raw, detail=60)
+    assert texture("d") < base < default < strong

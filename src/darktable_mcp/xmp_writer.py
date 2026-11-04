@@ -242,6 +242,8 @@ def _modules(adj: AdjustmentState, masked: bool = False) -> list[tuple[str, int,
         params = _color_balance(adj.saturation, adj.vibrance, adj.contrast)
         mods.append(("colorbalancergb", 5, params.hex(), "", _BLENDOP_SCENE))
     if adj.clarity:
+        # Bilateral grid with detail 1 + clarity/100, i.e. the GUI's detail slider at 200 % + clarity (100 % =
+        # unchanged, darktable's default 125 %): strong even at small values, kept as the user calibrated it.
         mods.append(("bilat", 3, struct.pack("<i4f", 0, 50, 50, 1.0 + adj.clarity / 100, 0.2).hex(), "", _BLENDOP))
     if adj.sharpness > 0:
         mods.append(("sharpen", 1, struct.pack("<3f", 2.0, adj.sharpness / 100, 0.5).hex(), "", _BLENDOP))
@@ -311,7 +313,12 @@ def _gradient_points(g: GradientMask, flip: int) -> bytes:
 
 
 def xmp_text(edit_state: EditState) -> str:
-    mods = [(*m, 0) for m in _modules(edit_state.adjustments)]
+    mods = [(*m, 0) for m in _modules(edit_state.adjustments) if not (edit_state.local_contrast and m[0] == "bilat")]
+    if lc := edit_state.local_contrast:
+        # bilat v3: mode local laplacian, sigma_r = highlights, sigma_s = shadows, detail, midtone range; the GUI
+        # shows highlights/shadows × 100 % and detail as (p + 1) × 100 %
+        params = struct.pack("<i4f", 1, lc.highlights / 100, lc.shadows / 100, lc.detail / 100 - 1, lc.midtone_range)
+        mods.append(("bilat", 3, params.hex(), "", _BLENDOP, 0))
     if g := edit_state.graduated:
         # graduatednd v1: density, hardness, rotation, offset, hue 0–1, saturation 0–1
         params = struct.pack("<6f", g.density, g.hardness, -g.rotation, g.offset, g.hue / 360, g.saturation / 100)

@@ -49,6 +49,8 @@ Sprawdzone układy (little-endian, 5.6.1):
 - colorequal v4 `<6fi25f` (128 B): threshold 0.1, hue curve 1, contrast 0, white level 1, chroma size 1.5, param size 1,
   use_filter 1; 8× sat, 8× hue °, 8× bright (red…magenta), hue_shift. GUI: sat/bright = (p − 1) × 100 %.
 - sigmoid wpisany z multi_name `_builtin_scene-referred default` zastępuje auto-applied (render z domyślnymi = bez wpisu).
+- bilat v3 `<i4f`: mode (1 = local laplacian), sigma_r = highlights, sigma_s = shadows, detail (0 = bez zmiany;
+  GUI (p + 1) × 100 %), midtone range. `clarity` pisze detail 1 + clarity/100, czyli w GUI 200 % + clarity.
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 

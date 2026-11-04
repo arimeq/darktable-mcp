@@ -13,7 +13,8 @@ from typing import Optional
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from .edits import HUES, ColorEqualizerState, CropState, EditState, GraduatedState, SigmoidState, MaskedAdjustment, MaskState
+from .edits import (HUES, ColorEqualizerState, CropState, EditState, GraduatedState, LocalContrastState,
+                    MaskedAdjustment, MaskState, SigmoidState)
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
 from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_flip,
                          xmp_sidecar_path, xmp_text)
@@ -310,7 +311,9 @@ def apply_adjustments(
     vignette : float
         [not rendered] Vignette: negative values darken edges, positive lighten (-100 to +100).
     clarity : float
-        Local contrast / clarity (-100 to +100).
+        Local contrast (-100 to +100): darktable local contrast, bilateral grid, with its detail slider at
+        200 % + clarity (100 % = unchanged, darktable's default 125 %), so even +10 is strong and +25 shows
+        halos.  For finer control use local_contrast, which replaces this.
     dehaze_strength : float
         darktable "haze removal" strength (-1 to +1, GUI default 0.2). 0 = off; negative adds haze.
         Only useful on genuinely hazy/foggy scenes; it is not a contrast tool.
@@ -576,6 +579,39 @@ def color_equalizer(
     if state.color_eq:
         for field_, values in (("saturation", saturation), ("hue", hue), ("brightness", brightness)):
             getattr(state.color_eq, field_).update({k: float(v) for k, v in (values or {}).items()})
+    state.save()
+    return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
+
+
+@mcp.tool()
+def local_contrast(
+    image_path: str,
+    detail: Optional[float] = None,
+    highlights: Optional[float] = None,
+    shadows: Optional[float] = None,
+    midtone_range: Optional[float] = None,
+    reset: bool = False,
+) -> dict:
+    """darktable local contrast (local laplacian, its default mode) with all its sliders, in its GUI's units.
+
+    Starts from darktable's defaults; only the parameters you supply change; *reset* removes it.  While set, it
+    replaces the module apply_adjustments' clarity writes (clarity stays stored and returns after a reset).
+    detail : % (100 = unchanged, default 125; 110–140 = subtle to clear; below 100 softens).  Crunchy texture
+        usually means too much detail.
+    highlights, shadows : % (0–200, default 50): how much of the effect reaches bright / dark tones.  Lower
+        highlights to keep skies and clouds from looking over-drawn.
+    midtone_range : 0.001–1 (default 0.5): the tonal range treated as midtones; smaller compresses large-scale
+        tones more (an HDR look), larger keeps the effect to texture.
+    """
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    state.local_contrast = None if reset else state.local_contrast or LocalContrastState()
+    if state.local_contrast:
+        state.local_contrast.__dict__.update({k: float(v) for k, v in {
+            "detail": detail, "highlights": highlights, "shadows": shadows,
+            "midtone_range": midtone_range}.items() if v is not None})
     state.save()
     return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
 
@@ -1022,7 +1058,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, color equalizer, masked adjustments) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, color equalizer, local contrast, masked adjustments) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -1039,6 +1075,7 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None
     tgt_state.sigmoid = replace(src_state.sigmoid) if src_state.sigmoid else None
     tgt_state.color_eq = deepcopy(src_state.color_eq)
+    tgt_state.local_contrast = deepcopy(src_state.local_contrast)
     tgt_state.masked = deepcopy(src_state.masked)
     tgt_state.save()
 
