@@ -1,6 +1,7 @@
 """Image processing pipeline using rawpy (for RAW) and Pillow (for all types)."""
 from __future__ import annotations
 
+import colorsys
 import math
 from pathlib import Path
 from typing import Optional
@@ -8,11 +9,39 @@ from typing import Optional
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
 
-from .edits import EditState, AdjustmentState, CropState
+from .edits import EditState, AdjustmentState, CropState, GraduatedState
 
 RAW_EXTENSIONS = {".nef", ".cr2", ".cr3", ".arw", ".raf", ".rw2", ".dng", ".orf", ".pef", ".srw", ".3fr"}
 IMG_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
 ALL_EXTENSIONS = RAW_EXTENSIONS | IMG_EXTENSIONS
+
+
+def _read_raw_camera(path: Path) -> dict:
+    """Read camera make/model from the EXIF IFD0 embedded in a RAW file.
+
+    CR3 is ISO-BMFF and keeps IFD0 as a TIFF blob in a ``CMT1`` box; most other
+    RAW formats are TIFF-based and piexif can read them directly.
+    """
+    import struct
+
+    import piexif
+
+    try:
+        if path.suffix.lower() == ".cr3":
+            head = path.read_bytes()[:200_000]
+            i = head.find(b"CMT1")
+            if i < 4:
+                return {}
+            (size,) = struct.unpack(">I", head[i - 4:i])
+            ifd0 = piexif.load(head[i + 4:i - 4 + size])["0th"]
+        else:
+            ifd0 = piexif.load(str(path))["0th"]
+    except Exception:
+        return {}
+    make = ifd0.get(piexif.ImageIFD.Make, b"").decode(errors="replace").strip("\0 ")
+    model = ifd0.get(piexif.ImageIFD.Model, b"").decode(errors="replace").strip("\0 ")
+    camera = model if model.startswith(make) else f"{make} {model}".strip()
+    return {"camera": camera} if camera else {}
 
 
 # ---------------------------------------------------------------------------
@@ -51,10 +80,10 @@ def _build_shadow_highlight_lut(
     black_point = 255.0 * (-blacks / 200.0)
     lut = (lut - black_point) / (white_point - black_point) * 255.0
 
-    # Highlights: bring down the top end
+    # Highlights: negative recovers (darkens) the top end, positive boosts it
     hl = highlights / 100.0
     mask_hl = lut / 255.0
-    lut = lut - hl * mask_hl ** 2 * 80.0
+    lut = lut + hl * mask_hl ** 2 * 80.0
 
     # Shadows: lift the bottom end
     sh = shadows / 100.0
@@ -104,6 +133,23 @@ def _apply_vignette(img: Image.Image, strength: float) -> Image.Image:
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
 
 
+def _apply_graduated(img: Image.Image, g: GraduatedState) -> Image.Image:
+    """darktable graduatednd process() in linear light, on the full uncropped frame like darktable."""
+    w, h = img.size
+    v = math.radians(g.rotation)  # deg2radf(-param rotation)
+    Y, X = np.mgrid[-1:1:h * 1j, -1:1:w * 1j]
+    hardness = (h / 2) / math.hypot(w / 2, h / 2) / (1 - (0.5 + g.hardness / 100 * 0.45)) * 0.5
+    length = (math.sin(v) * X - math.cos(v) * Y - 1 + g.offset / 50) * hardness
+    c = np.array(colorsys.hls_to_rgb(g.hue / 360, 0.5, g.saturation / 100), dtype=np.float32)
+    arr = (np.asarray(img, dtype=np.float32) / 255) ** 2.2
+    if g.density > 0:
+        arr /= c + (1 - c) * np.exp2(g.density * np.clip(0.5 + length, 0, 1))[..., None]
+    else:
+        c = 1 - c
+        arr *= c + (1 - c) * np.exp2(-g.density * np.clip(0.5 - length, 0, 1))[..., None]
+    return Image.fromarray((np.clip(arr, 0, 1) ** (1 / 2.2) * 255).astype(np.uint8))
+
+
 def _apply_clarity(img: Image.Image, clarity: float) -> Image.Image:
     """Local contrast via unsharp mask with a large radius."""
     if abs(clarity) < 1.0:
@@ -114,6 +160,15 @@ def _apply_clarity(img: Image.Image, clarity: float) -> Image.Image:
         return img.filter(ImageFilter.UnsharpMask(radius=radius, percent=int(amount * 80), threshold=2))
     else:
         return img.filter(ImageFilter.GaussianBlur(radius=amount * 3))
+
+
+def _apply_dehaze(img: Image.Image, strength: float) -> Image.Image:
+    """Rough dark-channel-prior preview of darktable's haze removal (ignores distance)."""
+    arr = np.array(img, dtype=np.float32) / 255.0
+    dark = np.array(Image.fromarray((arr.min(axis=2) * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(15)), np.float32) / 255.0
+    airlight = arr.reshape(-1, 3)[dark.ravel() >= np.quantile(dark, 0.999)].mean(axis=0)
+    t = np.clip(1.0 - strength * dark / airlight.max(), 0.1, None)[..., None]
+    return Image.fromarray((np.clip((arr - airlight) / t + airlight, 0, 1) * 255).astype(np.uint8))
 
 
 def _apply_vibrance(img: Image.Image, vibrance: float) -> Image.Image:
@@ -181,13 +236,15 @@ class ImageProcessor:
         else:
             img = self._process_raster(edit_state.adjustments)
 
+        if edit_state.graduated:
+            img = _apply_graduated(img, edit_state.graduated)
         img = self._apply_post_raw(img, edit_state.adjustments)
 
         if edit_state.crop:
             img = self._apply_crop(img, edit_state.crop)
 
         if preview_size:
-            img.thumbnail((preview_size, preview_size), Image.LANCZOS)
+            img.thumbnail((preview_size, preview_size), Image.Resampling.LANCZOS)
 
         return img
 
@@ -204,13 +261,24 @@ class ImageProcessor:
                 with rawpy.imread(str(self.path)) as raw:
                     info["width"] = raw.sizes.width
                     info["height"] = raw.sizes.height
-                    info["camera"] = raw.metadata.camera
-                    info["iso"] = raw.metadata.iso
-                    info["shutter"] = raw.metadata.shutter
-                    info["aperture"] = raw.metadata.aperture
-                    info["focal_len"] = raw.metadata.focal_len
-                    info["timestamp"] = raw.metadata.timestamp
                     info["raw_type"] = raw.raw_type.name
+                    if hasattr(raw, "other"):
+                        # rawpy >= 0.27: shot data moved to .other / .lens
+                        info["iso"] = raw.other.iso_speed
+                        info["shutter"] = raw.other.shutter_speed
+                        info["aperture"] = raw.other.aperture
+                        info["focal_len"] = raw.other.focal_length
+                        info["timestamp"] = str(raw.other.timestamp)
+                        info["lens"] = raw.lens.model or None
+                    else:
+                        info["camera"] = raw.metadata.camera
+                        info["iso"] = raw.metadata.iso
+                        info["shutter"] = raw.metadata.shutter
+                        info["aperture"] = raw.metadata.aperture
+                        info["focal_len"] = raw.metadata.focal_len
+                        info["timestamp"] = raw.metadata.timestamp
+                if "camera" not in info:
+                    info.update(_read_raw_camera(self.path))
             else:
                 with Image.open(self.path) as img:
                     info["width"] = img.width
@@ -276,6 +344,9 @@ class ImageProcessor:
             r, g, b = _kelvin_to_rgb_shift(adj.temperature_kelvin, adj.tint)
             img = _apply_wb_pillow(img, r, g, b)
 
+        if adj.dehaze_strength:
+            img = _apply_dehaze(img, adj.dehaze_strength)
+
         # Highlight & shadow recovery
         if adj.highlight_recovery > 0 or adj.shadow_lift > 0:
             img = _apply_highlight_shadow_recovery(img, adj.highlight_recovery, adj.shadow_lift)
@@ -328,7 +399,7 @@ class ImageProcessor:
 
         # Apply rotation first (expand so no content is lost, then re-crop)
         if abs(crop.rotation) > 0.01:
-            img = img.rotate(-crop.rotation, expand=True, resample=Image.BICUBIC)
+            img = img.rotate(-crop.rotation, expand=True, resample=Image.Resampling.BICUBIC)
             w, h = img.size
 
         left = int(crop.left * w)

@@ -16,6 +16,17 @@ class CropState:
 
 
 @dataclass
+class GraduatedState:
+    """darktable graduated density, in the units its GUI shows."""
+    density: float = 1.0     # EV, -8 to +8
+    hardness: float = 0.0    # %, 0 = soft
+    rotation: float = 0.0    # degrees as the GUI slider shows them (the param is its negation)
+    offset: float = 50.0     # % position of the transition line (rotation 0: from the top)
+    hue: float = 0.0         # degrees
+    saturation: float = 0.0  # %, 0 = neutral grey
+
+
+@dataclass
 class AdjustmentState:
     # --- Exposure ---
     exposure_ev: float = 0.0          # stops, -5 to +5
@@ -46,6 +57,8 @@ class AdjustmentState:
     # --- Effects ---
     vignette: float = 0.0   # -100 to +100 (negative = dark edges)
     clarity: float = 0.0    # -100 to +100 (local contrast)
+    dehaze_strength: float = 0.0  # darktable haze removal: -1 to +1 (negative adds haze)
+    dehaze_distance: float = 0.2  # 0 = foreground only, 1 = whole scene
 
 
 @dataclass
@@ -53,6 +66,7 @@ class EditState:
     source_path: Path
     adjustments: AdjustmentState = field(default_factory=AdjustmentState)
     crop: Optional[CropState] = None
+    graduated: Optional[GraduatedState] = None
     output_name: Optional[str] = None  # stem only, no extension
 
     # ------------------------------------------------------------------
@@ -77,18 +91,14 @@ class EditState:
         state.adjustments = AdjustmentState(**valid)
         crop_data = data.get("crop")
         state.crop = CropState(**crop_data) if crop_data else None
+        state.graduated = GraduatedState(**data["graduated"]) if data.get("graduated") else None
         state.output_name = data.get("output_name")
         return state
 
     def save(self):
         sidecar = self._sidecar(self.source_path)
-        data = {
-            "adjustments": asdict(self.adjustments),
-            "crop": asdict(self.crop) if self.crop else None,
-            "output_name": self.output_name,
-        }
         with open(sidecar, "w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(self.to_dict(), f, indent=2)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -110,7 +120,9 @@ class EditState:
             a.sharpness != defaults.sharpness,
             a.noise_reduction != defaults.noise_reduction,
             a.vignette != defaults.vignette,
+            a.dehaze_strength != defaults.dehaze_strength,
             self.crop is not None,
+            self.graduated is not None,
             self.output_name is not None,
         ])
 
@@ -118,5 +130,6 @@ class EditState:
         return {
             "adjustments": asdict(self.adjustments),
             "crop": asdict(self.crop) if self.crop else None,
+            "graduated": asdict(self.graduated) if self.graduated else None,
             "output_name": self.output_name,
         }

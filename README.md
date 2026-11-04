@@ -13,7 +13,7 @@ Tell Claude what you want — *"make this warmer and more dramatic"*, *"crop to 
 ## Features
 
 - 🖼️ **RAW file support** — CR2, NEF, ARW, RAF, DNG, ORF, RW2, and more
-- 🎨 **Full editing toolkit** — exposure, white balance, contrast, highlights/shadows, saturation, vibrance, clarity, sharpness, noise reduction, vignette
+- 🎨 **Full editing toolkit** — exposure, white balance, contrast, highlights/shadows, saturation, vibrance, clarity, haze removal, sharpness, noise reduction, vignette
 - ✂️ **Crop & rotate** — free crop, aspect ratio crop (16:9, 4:3, 1:1…), straighten
 - 📝 **Rename outputs** — give your exports meaningful names
 - 📊 **Histogram analysis** — Claude checks clipping and tonal distribution before suggesting edits
@@ -35,7 +35,7 @@ Tell Claude what you want — *"make this warmer and more dramatic"*, *"crop to 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yadullahabidi/darktable-mcp.git
+git clone https://github.com/YaddyVirus/darktable-mcp
 cd darktable-mcp
 ```
 
@@ -125,7 +125,7 @@ Claude will:
 1. Call `list_images` to see your folder
 2. Call `get_image_preview` to analyse the photo
 3. Call `apply_adjustments` with specific values
-4. Show you a preview (saved as `filename__preview.jpg` next to the source)
+4. Look at a fresh preview (pass `save` / `open_viewer` to also write `filename__preview.jpg` and open it)
 5. Iterate based on your feedback
 6. Export the final image when you're happy
 
@@ -140,6 +140,7 @@ Claude will:
 | `crop_image` | Crop by coordinates or aspect ratio |
 | `rotate_image` | Rotate / straighten |
 | `reset_crop` | Remove crop, restore full frame |
+| `graduated_filter` | Graduated ND filter (darktable graduated density): darken/tint one side, e.g. the sky |
 | `rename_output` | Set the export filename |
 | `export_image` | Export to JPEG / PNG / TIFF |
 | `reset_edits` | Undo everything, back to original |
@@ -161,7 +162,28 @@ Claude will:
 
 Each image gets a companion `.mcp.json` sidecar file (e.g. `IMG_3500.mcp.json`) that stores all adjustments non-destructively. Your original RAW files are never modified.
 
-On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too.
+On export, a Darktable-compatible `.xmp` sidecar is also written, so you can open the RAW in Darktable and see the edits there too. A sidecar already written by Darktable itself is never overwritten.
+
+When `darktable-cli` is installed, RAW previews, histograms and exports are all rendered by it from that XMP, so what Claude sees is what gets exported. Each result says which renderer was used (`rendered_via`), and falls back to `rawpy` with a warning if darktable-cli fails. If the RAW already has a sidecar written by Darktable:
+- if it holds Darktable edits, it is rendered as-is and the tools warn that their edits are not applied;
+- if it holds none (Darktable writes one at import), your edits are rendered, but the sidecar is still never overwritten, and the export says the edits were not saved to any sidecar.
+
+| Adjustment | Darktable module |
+|---|---|
+| exposure, black level | exposure |
+| temperature, tint | color calibration (CAT tab illuminant) |
+| shadows, highlights | tone equalizer |
+| saturation, vibrance | color balance rgb (global chroma, global vibrance) |
+| tone mapper | none written: darktable applies the one your workflow uses (sigmoid, filmic or AgX) |
+| contrast | color balance rgb (contrast) |
+| clarity | local contrast |
+| dehaze | haze removal |
+| sharpness, noise reduction | sharpen, denoise (profiled) |
+| crop | crop |
+
+Brightness, whites, blacks, vignette, highlight recovery, shadow lift and rotation are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
+
+**What `exposure_ev = 0` means.** In its scene-referred workflows, Darktable auto-applies an exposure of +0.7 EV to every RAW and adds back any exposure bias set on the camera (a shot at −1 EV gets +1 EV). The server's exposure replaces that instance but builds on its values, so `exposure_ev` is relative to Darktable's default: 0 looks exactly like a freshly imported RAW in Darktable, and +1 is one stop brighter than that.
 
 ---
 
@@ -177,7 +199,7 @@ Use the full path to your Python executable in the config. Run `where python` (W
 Some camera models need an updated version of `rawpy`. Run `pip install --upgrade rawpy`.
 
 **Preview file not opening**  
-The preview is always saved as `originalname__preview.jpg` next to your source file. Open it manually if your system doesn't pop it up automatically.
+Previews are only written to disk when you ask for it (`save` or `open_viewer`), as `originalname__preview.jpg` next to your source file. Open it manually if your system doesn't pop it up automatically.
 
 ---
 
