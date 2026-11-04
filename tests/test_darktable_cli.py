@@ -56,6 +56,7 @@ def test_exposure_brightens_render(raw, tmp_path):
 def test_darktable_accepts_every_written_module(raw, tmp_path):
     server.apply_adjustments(raw, exposure_ev=0.5, contrast=0.3, black_level=0.01)
     server.tone_mapper(raw, contrast=1.8, skew=-0.2, white_target=95, hue_preservation=80)
+    server.color_equalizer(raw, saturation={"green": 20}, hue={"red": 5}, brightness={"blue": -20})
     server.export_image(raw, output_directory=str(tmp_path / "out"), max_dimension=200)
     ops = re.findall(r'darktable:operation="(\w+)"', xmp_sidecar_path(server.Path(raw)).read_text())
     assert ops
@@ -218,3 +219,22 @@ def test_tone_mapper_replaces_the_workflow_sigmoid(raw, tmp_path):
     assert punchy.std() > base.std() * 1.1
     server.tone_mapper(raw, contrast=1.5, white_target=70)
     assert np.percentile(export_gray(raw, str(tmp_path / "d")), 99) < np.percentile(base, 99) - 5
+
+
+def test_color_equalizer_targets_one_hue(raw, tmp_path):
+    def hsv(name):
+        r = server.export_image(raw, output_directory=str(tmp_path / name), max_dimension=400)
+        return np.asarray(Image.open(r["output_path"]).convert("HSV"), float)
+    base = hsv("a")
+    h, s = base[..., 0] * 360 / 255, base[..., 1]
+    warm, blue = (h > 15) & (h < 75) & (s > 60), (h > 190) & (h < 250) & (s > 60)
+    region, own, other = ((blue, ("cyan", "blue"), ("orange", "yellow")) if blue.sum() > warm.sum()
+                          else (warm, ("orange", "yellow"), ("cyan", "blue")))
+    server.color_equalizer(raw, saturation=dict.fromkeys(other, -100))
+    assert hsv("b")[..., 1][region].mean() > 0.9 * s[region].mean()
+    server.color_equalizer(raw, reset=True)
+    server.color_equalizer(raw, saturation=dict.fromkeys(own, -100))
+    assert hsv("c")[..., 1][region].mean() < 0.6 * s[region].mean()
+    server.color_equalizer(raw, reset=True)
+    server.color_equalizer(raw, brightness=dict.fromkeys(own, -50))
+    assert hsv("d")[..., 2][region].mean() < base[..., 2][region].mean() - 10

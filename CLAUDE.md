@@ -46,6 +46,9 @@ Sprawdzone układy (little-endian, 5.6.1):
 - gradient (mask_type 16) `<6fi`: anchor x/y (pełna klatka sensora, przed flip; orientacja = `rawpy sizes.flip`, ale z zamienionymi
   5↔6: EXIF 6 to LibRaw 6, a darktable 5 = ROTATE_CW_90_DEG), rotation (0 = maska u góry sensora, 90 = lewo), compression 0–1 (erf, w przekątnych), steepness, curvature, state 2 (sigmoidal); grupa (mask_type 4) `<3if`: formid, parentid, state 3, opacity.
   Dodatkowe instancje (multi_priority > 0) wymagają `iop_order_list`, inaczej darktable je pomija.
+- colorequal v4 `<6fi25f` (128 B): threshold 0.1, hue curve 1, contrast 0, white level 1, chroma size 1.5, param size 1,
+  use_filter 1; 8× sat, 8× hue °, 8× bright (red…magenta), hue_shift. GUI: sat/bright = (p − 1) × 100 %.
+- sigmoid wpisany z multi_name `_builtin_scene-referred default` zastępuje auto-applied (render z domyślnymi = bez wpisu).
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 

@@ -36,6 +36,17 @@ class SigmoidState:
     hue_preservation: float = 100.0 # %
 
 
+HUES = ("red", "orange", "yellow", "green", "cyan", "blue", "lavender", "magenta")
+
+
+@dataclass
+class ColorEqualizerState:
+    """darktable color equalizer nodes as its GUI shows them: hue name -> % (saturation, brightness) or ° (hue)."""
+    saturation: dict[str, float] = field(default_factory=dict)  # -100 to +100 %
+    hue: dict[str, float] = field(default_factory=dict)         # -180 to 180 °
+    brightness: dict[str, float] = field(default_factory=dict)  # -100 to +100 %
+
+
 @dataclass
 class GradientMask:
     """darktable drawn gradient mask, placed on the full uncropped frame."""
@@ -118,6 +129,7 @@ class EditState:
     crop: Optional[CropState] = None
     graduated: Optional[GraduatedState] = None
     sigmoid: Optional[SigmoidState] = None
+    color_eq: Optional[ColorEqualizerState] = None
     masked: list[MaskedAdjustment] = field(default_factory=list)
     output_name: Optional[str] = None  # stem only, no extension
     # 2: gradient masks are upright (before: in the sensor's frame, which differs on portrait shots)
@@ -147,6 +159,7 @@ class EditState:
         state.crop = CropState(**crop_data) if crop_data else None
         state.graduated = GraduatedState(**data["graduated"]) if data.get("graduated") else None
         state.sigmoid = SigmoidState(**data["sigmoid"]) if data.get("sigmoid") else None
+        state.color_eq = ColorEqualizerState(**data["color_eq"]) if data.get("color_eq") else None
         state.masked = [MaskedAdjustment(**m) for m in data.get("masked", [])]
         state.output_name = data.get("output_name")
         state.version = data.get("version", 1)
@@ -181,6 +194,7 @@ class EditState:
             self.crop is not None,
             self.graduated is not None,
             self.sigmoid is not None,
+            self.color_eq is not None,
             bool(self.masked),
             self.output_name is not None,
         ])
@@ -191,6 +205,7 @@ class EditState:
             "crop": asdict(self.crop) if self.crop else None,
             "graduated": asdict(self.graduated) if self.graduated else None,
             "sigmoid": asdict(self.sigmoid) if self.sigmoid else None,
+            "color_eq": asdict(self.color_eq) if self.color_eq else None,
             "masked": [asdict(m) for m in self.masked],
             "output_name": self.output_name,
             "version": self.version,

@@ -13,7 +13,7 @@ from typing import Optional
 
 from mcp.server.mcpserver import Image, MCPServer
 
-from .edits import CropState, EditState, GraduatedState, SigmoidState, MaskedAdjustment, MaskState
+from .edits import HUES, ColorEqualizerState, CropState, EditState, GraduatedState, SigmoidState, MaskedAdjustment, MaskState
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
 from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_flip,
                          xmp_sidecar_path, xmp_text)
@@ -548,6 +548,38 @@ def tone_mapper(
     return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
 
 
+@mcp.tool()
+def color_equalizer(
+    image_path: str,
+    saturation: Optional[dict] = None,
+    hue: Optional[dict] = None,
+    brightness: Optional[dict] = None,
+    reset: bool = False,
+) -> dict:
+    """darktable color equalizer: saturation, brightness and hue shift per hue, in its GUI's units.
+
+    Each argument maps hue nodes red, orange, yellow, green, cyan, blue, lavender, magenta to a value; only the
+    nodes you pass change, *reset* removes the module.  Foliage sits between yellow and green, skin is orange,
+    blue sky is blue (cyan towards the horizon).
+    saturation, brightness : % from -100 to +100 (0 = unchanged).  E.g. juicier greens like a camera JPEG:
+        saturation {"green": 20, "yellow": 10}; a darker blue sky like a polariser, clouds untouched:
+        brightness {"blue": -25}.
+    hue : degrees from -180 to 180, shifts that node's colours (e.g. {"green": -10} warms foliage).
+    """
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    if bad := [k for d in (saturation, hue, brightness) for k in d or {} if k not in HUES]:
+        return {"error": f"Unknown hue node(s) {bad}; use {list(HUES)}"}
+    state.color_eq = None if reset else state.color_eq or ColorEqualizerState()
+    if state.color_eq:
+        for field_, values in (("saturation", saturation), ("hue", hue), ("brightness", brightness)):
+            getattr(state.color_eq, field_).update({k: float(v) for k, v in (values or {}).items()})
+    state.save()
+    return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
+
+
 _MASK_DOC = """
     Masked adjustment: an extra darktable instance of each module the adjustments map to, blended through its
     own mask (drawn & parametric, blend colour space RGB (scene)), on top of the global edit.
@@ -990,7 +1022,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, masked adjustments) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, color equalizer, masked adjustments) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -1006,6 +1038,7 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     tgt_state.crop = replace(src_state.crop) if src_state.crop else None
     tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None
     tgt_state.sigmoid = replace(src_state.sigmoid) if src_state.sigmoid else None
+    tgt_state.color_eq = deepcopy(src_state.color_eq)
     tgt_state.masked = deepcopy(src_state.masked)
     tgt_state.save()
 

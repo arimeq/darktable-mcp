@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 from xml.sax.saxutils import escape
 
-from .edits import AdjustmentState, EditState, GradientMask, MaskState
+from .edits import HUES, AdjustmentState, EditState, GradientMask, MaskState
 
 _BLENDOP = "gz11eJxjYIAACQYYOOHEgAZY0QWAgBGLGANDgz0Ej1Q+dcF/IADRAGpyHQU="
 # Blending off, blend colour space "RGB (scene)" as darktable assigns to scene-referred RGB modules.
@@ -323,6 +323,14 @@ def xmp_text(edit_state: EditState) -> str:
         params = struct.pack("<4fif6ffi", t.contrast, t.skew, t.white_target, t.black_target, 0, t.hue_preservation,
                              *[0.0] * 6, 0.0, 0)
         mods.append(("sigmoid", 3, params.hex(), _SCENE_DEFAULT, _BLENDOP_SCENE, 0))
+    if c := edit_state.color_eq:
+        # colorequal v4: threshold, hue curve, contrast, white level, hue analysis radius, effect radius, guided
+        # filter (darktable's defaults); 8 saturation, 8 hue, 8 brightness nodes; node placement 0. The GUI shows
+        # saturation/brightness as (param - 1) × 100 %.
+        params = struct.pack("<6fi25f", 0.1, 1.0, 0.0, 1.0, 1.5, 1.0, 1,
+                             *[1 + c.saturation.get(h, 0) / 100 for h in HUES], *[c.hue.get(h, 0) for h in HUES],
+                             *[1 + c.brightness.get(h, 0) / 100 for h in HUES], 0.0)
+        mods.append(("colorequal", 4, params.hex(), "", _BLENDOP_SCENE, 0))
     forms, instances = [], {}
     flip = raw_flip(edit_state.source_path) if any(m.mask.gradient for m in edit_state.masked) else 0
     for n, m in enumerate(edit_state.masked):

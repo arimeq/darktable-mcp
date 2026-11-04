@@ -143,6 +143,7 @@ Claude will:
 | `rotate_image` | Rotate / straighten |
 | `reset_crop` | Remove crop, restore full frame |
 | `tone_mapper` | darktable sigmoid: contrast, skew, target white/black, hue preservation |
+| `color_equalizer` | darktable color equalizer: saturation, brightness, hue shift per hue (e.g. greens, blue sky) |
 | `graduated_filter` | Graduated ND filter (darktable graduated density): darken/tint one side, e.g. the sky |
 | `add_masked_adjustment` | Adjustments only where a mask selects: drawn gradient and/or luminance, hue, chroma ranges |
 | `update_masked_adjustment`, `remove_masked_adjustment`, `list_masked_adjustments` | Manage masked adjustments |
