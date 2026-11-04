@@ -10,7 +10,7 @@ import subprocess
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from darktable_mcp import server, xmp_writer
 from darktable_mcp.xmp_writer import xmp_sidecar_path
@@ -139,3 +139,34 @@ def test_gradient_rotation_follows_portrait_orientation(raw, orientation, monkey
     m = np.asarray(Image.open(io.BytesIO(server.export_mask_preview(raw, mid, max_size=400)[1].data)), float)
     q = m.shape[0] // 4
     assert m.shape[0] > m.shape[1] and m[:q].mean() > 200 and m[-q:].mean() < 50
+
+
+def test_region_preview_renders_at_full_resolution(raw):
+    server.crop_image(raw, left=0.1, top=0.1, right=0.9, bottom=0.9)
+    text, img = server.get_image_preview(raw, max_size=3000, region=[0.4, 0.4, 0.1, 0.1])
+    full_w, full_h = server._full_size(server.Path(raw))
+    assert '"scale": 1.0' in text
+    assert Image.open(io.BytesIO(img.data)).size == pytest.approx((full_w * 0.08, full_h * 0.08), abs=3)
+
+
+def test_match_crop_to_camera_jpeg(raw, tmp_path):
+    full = Image.open(server.export_image(raw, output_directory=str(tmp_path / "full"), quality=95)["output_path"])
+    w, h = full.size
+    # a "camera JPEG": cropped, with a punchier look than darktable's
+    cam = ImageEnhance.Contrast(ImageEnhance.Color(full.crop((int(.2 * w), int(.15 * h), int(.85 * w), int(.7 * h))))
+                                .enhance(1.5)).enhance(1.3)
+    cam.save(tmp_path / "cam.jpg", quality=90)
+    r = server.match_crop_to_jpeg(raw, str(tmp_path / "cam.jpg"))
+    assert r["score"] > 0.8, r
+    assert [r["crop"][k] for k in ("left", "top", "right", "bottom")] == pytest.approx([.2, .15, .85, .7], abs=0.003)
+    text, img = server.compare_images(raw, str(tmp_path / "cam.jpg"), max_size=400)
+    side = Image.open(io.BytesIO(img.data))
+    assert side.width == pytest.approx(2 * side.height * cam.width / cam.height + 8, abs=4)
+
+
+def test_export_overwrite_replaces_named_output(raw, tmp_path):
+    first = server.export_image(raw, output_directory=str(tmp_path), max_dimension=200)["output_path"]
+    assert server.export_image(raw, output_directory=str(tmp_path), max_dimension=200)["output_path"] != first
+    server.apply_adjustments(raw, exposure_ev=1)
+    r = server.export_image(raw, output_directory=str(tmp_path), max_dimension=200, overwrite=True)
+    assert r["output_path"] == first and r["rendered_via"] == "darktable-cli"

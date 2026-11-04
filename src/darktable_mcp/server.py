@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import tempfile
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
 
@@ -99,6 +99,32 @@ def _quick_preview(path: Path, state: EditState, max_size: int) -> tuple[bytes, 
     return buf.getvalue(), info
 
 
+def _full_size(path: Path) -> tuple[int, int]:
+    """Uncropped size of the upright image in px (for RAWs LibRaw's visible area, within a few px of darktable's)."""
+    if path.suffix.lower() not in RAW_EXTENSIONS:
+        from PIL import Image as PILImage, ImageOps
+        with PILImage.open(path) as img:
+            return ImageOps.exif_transpose(img).size
+    import rawpy
+    with rawpy.imread(str(path)) as raw:
+        w, h = raw.sizes.width, raw.sizes.height
+        return (h, w) if raw.sizes.flip & 4 else (w, h)
+
+
+def _region_state(state: EditState, region: Optional[list[float]]) -> EditState:
+    """A copy of *state* cropped further to *region* = [x, y, w, h], normalised to the current crop.
+
+    The crop module then hands darktable only that part, so it renders at full resolution without the rest.
+    """
+    if not region:
+        return state
+    x, y, w, h = region
+    c = state.crop or CropState()
+    cw, ch = c.right - c.left, c.bottom - c.top
+    return replace(state, crop=replace(c, left=c.left + x * cw, top=c.top + y * ch,
+                                       right=c.left + (x + w) * cw, bottom=c.top + (y + h) * ch))
+
+
 def _save_preview(path: Path, img_bytes: bytes, open_file: bool) -> str:
     import os
     preview_path = path.with_name(path.stem + "__preview.jpg")
@@ -158,7 +184,8 @@ def get_image_info(image_path: str) -> dict:
 
 @mcp.tool()
 def get_image_preview(
-    image_path: str, max_size: int = 1200, save: bool = False, open_viewer: bool = False
+    image_path: str, max_size: int = 1200, save: bool = False, open_viewer: bool = False,
+    region: Optional[list[float]] = None,
 ) -> list:
     """Render the image with all current edits applied and return it for analysis.
 
@@ -166,13 +193,21 @@ def get_image_preview(
     *save*: also write a __preview.jpg next to the source.
     *open_viewer*: save the preview and open it in the Windows image viewer (implies *save*).
     *max_size* controls the longest edge of the preview in pixels (default 1200).
+    *region*: [x, y, w, h] normalised to the current (cropped) output, e.g. [0.4, 0.3, 0.15, 0.15]; only that
+    part is rendered, at full resolution as long as it fits *max_size* (the result's "scale": 1.0 = 100 %
+    view).  Use it to check halos, crunchy texture and noise, which downscaled previews hide.
     """
     try:
         path, state = _load_or_new(image_path)
     except FileNotFoundError as e:
         return [f"Error: {e}"]
 
-    img_bytes, info = _quick_preview(path, state, max_size)
+    img_bytes, info = _quick_preview(path, _region_state(state, region), max_size)
+    if region:
+        from PIL import Image as PILImage
+        crop = _region_state(state, region).crop
+        full_w = _full_size(path)[0] * (crop.right - crop.left)
+        info["scale"] = round(PILImage.open(io.BytesIO(img_bytes)).width / full_w, 2)
     msg = "Preview rendered (not saved)."
     if save or open_viewer:
         msg = f"Preview saved to: {_save_preview(path, img_bytes, open_viewer)}"
@@ -626,6 +661,81 @@ def export_mask_preview(image_path: str, id: Optional[str] = None, max_size: int
         "; the sidecar holds the user's own darktable edits, rendered as-is" if foreign_edits(path) else "")]
 
 
+def _ncc(image, templ):
+    """Normalised cross-correlation of *templ* at every offset inside *image* (2-D float arrays), via FFT."""
+    import numpy as np
+    (H, W), (h, w) = image.shape, templ.shape
+    t = templ - templ.mean()
+    t /= np.sqrt((t ** 2).sum())
+    corr = np.fft.irfft2(np.fft.rfft2(image) * np.conj(np.fft.rfft2(t, image.shape)), image.shape)
+    c1, c2 = (np.pad(a.cumsum(0).cumsum(1), ((1, 0), (1, 0))) for a in (image, image ** 2))
+    win = lambda c: c[h:, w:] - c[:-h, w:] - c[h:, :-w] + c[:-h, :-w]
+    return corr[:H - h + 1, :W - w + 1] / np.sqrt(np.maximum(win(c2) - win(c1) ** 2 / t.size, 1e-9))
+
+
+@mcp.tool()
+def match_crop_to_jpeg(raw_path: str, jpeg_path: str) -> dict:
+    """Set the RAW's crop to the frame of an (edited, possibly cropped) camera JPEG of the same shot.
+
+    Finds the JPEG inside a render of the uncropped RAW (normalised cross-correlation on luminance, so a
+    different camera look does not matter) assuming the JPEG keeps the sensor's pixel scale (within ±4 %, which
+    is also searched).  Keeps the current rotation.  Reports the offset and size in full-resolution pixels,
+    the scale found and a match score (1 = identical structure; below ~0.6 the match is doubtful: check the
+    preview).  The JPEG must not be rotated or resized relative to the camera's output.
+    """
+    import numpy as np
+    from PIL import Image as PILImage, ImageOps
+    try:
+        path, state = _load_or_new(raw_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    full_w, full_h = _full_size(path)
+    img, info = _render(path, replace(state, crop=None), 1000)
+    image, f = np.asarray(img.convert("L"), float), img.width / full_w
+    with PILImage.open(jpeg_path) as jpg:
+        jpg = ImageOps.exif_transpose(jpg).convert("L")
+        jpg = jpg.resize((round(jpg.width * f), round(jpg.height * f)), PILImage.Resampling.LANCZOS)
+    best = (-1.0,)
+    for k in np.arange(0.96, 1.041, 0.01):
+        w, h = round(jpg.width * k), round(jpg.height * k)
+        if w <= image.shape[1] and h <= image.shape[0]:
+            m = _ncc(image, np.asarray(jpg.resize((w, h), PILImage.Resampling.LANCZOS), float))
+            best = max(best, (m.max(), *np.unravel_index(m.argmax(), m.shape), k, w, h))
+    if len(best) == 1:
+        return {"error": "The JPEG is larger than the RAW render: it was resized, not just cropped"}
+    score, y, x, k, w, h = map(float, best)
+    W, H = image.shape[1], image.shape[0]
+    state.crop = CropState(x / W, y / H, min(1.0, (x + w) / W), min(1.0, (y + h) / H),
+                           state.crop.rotation if state.crop else 0.0)
+    state.save()
+    return {"status": "ok", "crop": asdict(state.crop), "offset_px": [round(x / f), round(y / f)],
+            "size_px": [round(w / f), round(h / f)], "scale": round(float(k), 2), "score": round(float(score), 3),
+            "precision_px": round(1 / f)} | info
+
+
+@mcp.tool()
+def compare_images(path_a: str, path_b: str, region: Optional[list[float]] = None, max_size: int = 1200) -> list:
+    """One image with *path_a* (left) and *path_b* (right) side by side at the same height, each rendered with
+    its own edits (RAWs as the export would; JPEGs/other images as they are, plus any edits made here).
+
+    *region*: [x, y, w, h] normalised to each image's current output, applied to both (e.g. compare the same
+    detail of the RAW render and the camera JPEG); rendered at up to *max_size* px per image.
+    """
+    from PIL import Image as PILImage
+    try:
+        rendered = [_render(p, _region_state(st, region), max_size) for p, st in map(_load_or_new, (path_a, path_b))]
+    except FileNotFoundError as e:
+        return [f"Error: {e}"]
+    h = min(img.height for img, _ in rendered)
+    a, b = (img.resize((round(img.width * h / img.height), h), PILImage.Resampling.LANCZOS) for img, _ in rendered)
+    out = PILImage.new("RGB", (a.width + 8 + b.width, h), "white")
+    out.paste(a), out.paste(b, (a.width + 8, 0))
+    buf = io.BytesIO()
+    out.save(buf, format="JPEG", quality=90)
+    return [json.dumps({"left": path_a, "right": path_b, "a": rendered[0][1], "b": rendered[1][1]}, indent=1),
+            Image(data=buf.getvalue(), format="jpeg")]
+
+
 @mcp.tool()
 def rename_output(image_path: str, new_name: str) -> dict:
     """Set the output filename stem (without extension) for the exported image.
@@ -669,6 +779,7 @@ def export_image(
     use_darktable_cli: bool = True,
     write_xmp_sidecar: bool = True,
     max_dimension: Optional[int] = None,
+    overwrite: bool = False,
 ) -> dict:
     """Export the edited image to a file.
 
@@ -689,6 +800,8 @@ def export_image(
         current edits, unless a sidecar written by darktable itself exists (that one is used and kept).
     max_dimension : int, optional
         Resize so the longest edge is at most this many pixels.
+    overwrite : bool
+        Replace an existing file of the same name (e.g. a named final export) instead of adding _1, _2, ….
     """
     try:
         path, state = _load_or_new(image_path)
@@ -703,7 +816,9 @@ def export_image(
     ext = ext_map.get(format.lower(), ".jpg")
     out_path = out_dir / (stem + ext)
 
-    # Avoid collision
+    # darktable-cli never overwrites (it adds _01), and success is judged by the file appearing
+    if overwrite:
+        out_path.unlink(missing_ok=True)
     counter = 1
     while out_path.exists():
         out_path = out_dir / f"{stem}_{counter}{ext}"
@@ -840,7 +955,6 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
         return {"error": str(e)}
 
     from copy import deepcopy
-    from dataclasses import replace
     tgt_state.adjustments = replace(src_state.adjustments)
     tgt_state.crop = replace(src_state.crop) if src_state.crop else None
     tgt_state.graduated = replace(src_state.graduated) if src_state.graduated else None

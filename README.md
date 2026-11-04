@@ -135,7 +135,9 @@ Claude will:
 |------|-------------|
 | `list_images` | List all images in a directory |
 | `get_image_info` | EXIF metadata + current edit state |
-| `get_image_preview` | Render and preview with edits applied |
+| `get_image_preview` | Render and preview with edits applied; `region` renders one part at full resolution (100 % view) |
+| `compare_images` | Two images side by side (e.g. RAW render vs camera JPEG), same region and height |
+| `match_crop_to_jpeg` | Crop the RAW to the frame of an edited camera JPEG of the same shot |
 | `apply_adjustments` | Exposure, WB, tone, colour, detail, effects |
 | `crop_image` | Crop by coordinates or aspect ratio |
 | `rotate_image` | Rotate / straighten |
@@ -145,7 +147,7 @@ Claude will:
 | `update_masked_adjustment`, `remove_masked_adjustment`, `list_masked_adjustments` | Manage masked adjustments |
 | `export_mask_preview` | Render the masks darktable computes (white = full effect) |
 | `rename_output` | Set the export filename |
-| `export_image` | Export to JPEG / PNG / TIFF |
+| `export_image` | Export to JPEG / PNG / TIFF (`overwrite` replaces a file of the same name) |
 | `reset_edits` | Undo everything, back to original |
 | `get_histogram` | Tonal/clipping analysis |
 | `copy_settings` | Copy edits from one image to another |
