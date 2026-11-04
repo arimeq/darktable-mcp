@@ -141,6 +141,9 @@ Claude will:
 | `rotate_image` | Rotate / straighten |
 | `reset_crop` | Remove crop, restore full frame |
 | `graduated_filter` | Graduated ND filter (darktable graduated density): darken/tint one side, e.g. the sky |
+| `add_masked_adjustment` | Adjustments only where a mask selects: drawn gradient and/or luminance, hue, chroma ranges |
+| `update_masked_adjustment`, `remove_masked_adjustment`, `list_masked_adjustments` | Manage masked adjustments |
+| `export_mask_preview` | Render the masks darktable computes (white = full effect) |
 | `rename_output` | Set the export filename |
 | `export_image` | Export to JPEG / PNG / TIFF |
 | `reset_edits` | Undo everything, back to original |
@@ -182,6 +185,19 @@ When `darktable-cli` is installed, RAW previews, histograms and exports are all 
 | crop | crop |
 
 Brightness, whites, blacks, vignette, highlight recovery, shadow lift and rotation are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
+
+**Masked adjustments.** Each one becomes an extra instance of every module its adjustments map to (e.g. a second
+local contrast for "clarity in the sky"), after the global one in the pipe, blended in RGB (scene) through its own
+mask, as darktable's "drawn & parametric mask" mode with the parts multiplied. Structures, checked against the
+darktable 5.6.1 source and darktable-cli renders:
+- blend params: `dt_develop_blend_params_t` v14 (`develop/blend.h`); parametric ranges on the input channels g, Cz and
+  hz in the units the GUI shows (`blend_gui.c`), a range that wraps through 0° as the inverted complement;
+- gradient: `dt_masks_point_gradient_t` in a group form (`develop/masks.h`, mask version 6), in `masks_history`;
+- the extra instances are listed in `iop_order_list` right after their base instance; without it darktable drops them.
+
+The gradient's coordinates are those of the sensor, before darktable rotates portrait shots: on a portrait shot
+turn the rotation by ±90°. A luminance range refers to the module's own input: scene-linear before the tone mapper
+(exposure, tone equalizer, color balance rgb), display-referred after it (local contrast, sharpen).
 
 **What `exposure_ev = 0` means.** In its scene-referred workflows, Darktable auto-applies an exposure of +0.7 EV to every RAW and adds back any exposure bias set on the camera (a shot at −1 EV gets +1 EV). The server's exposure replaces that instance but builds on its values, so `exposure_ev` is relative to Darktable's default: 0 looks exactly like a freshly imported RAW in Darktable, and +1 is one stop brighter than that.
 

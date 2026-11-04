@@ -38,6 +38,14 @@ Sprawdzone układy (little-endian, 5.6.1):
   highlights_weight; chroma shadows/highlights/global/midtones; saturation global/highlights/midtones/shadows;
   hue_angle; brilliance global/highlights/midtones/shadows; mask_grey_fulcrum 0.1845; vibrance; grey_fulcrum 0.1845;
   contrast; saturation_formula (int).
+- blend params v14 `<3I2f3IfI4fI2I64f16f20s3i` (420 B): mask_mode (1 | 2 drawn | 4 parametric), blend_cst 4 (RGB scene),
+  blend_mode 24 (normal), parameter, opacity %, mask_combine (1 = invert), mask_id (grupa), blendif (bit kanału; +16 =
+  odwrócona polaryzacja), feathering radius, guide (5 = input after blur), blur, contrast, brightness, details,
+  feather_version 1, reserved×2, 16×4 parametry blend-if, 16 boost (Jz/Cz = -6.64385619), raster source, instance,
+  raster id -1, raster invert. Wartość suwaka = param × 2^boost × 100.
+- gradient (mask_type 16) `<6fi`: anchor x/y (pełna klatka sensora), rotation (0 = maska u góry, 90 = lewo),
+  compression 0–1, steepness, curvature, state 2 (sigmoidal); grupa (mask_type 4) `<3if`: formid, parentid, state 3, opacity.
+  Dodatkowe instancje (multi_priority > 0) wymagają `iop_order_list`, inaczej darktable je pomija.
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 
