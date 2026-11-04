@@ -1,6 +1,6 @@
-"""End-to-end checks against the real darktable-cli (5.6.1, the user's GUI version) on a sample RAW.
+"""End-to-end checks against the real darktable-cli (5.6.1, the user's GUI version) on sample RAWs.
 
-Run scripts/cloud-setup.sh first; it fetches darktable-cli and tests/data/_MG_7191.CR2.
+Run scripts/cloud-setup.sh first; it fetches darktable-cli and the samples into tests/data.
 """
 import re
 import shutil
@@ -13,14 +13,14 @@ from PIL import Image
 from darktable_mcp import server
 from darktable_mcp.xmp_writer import xmp_sidecar_path
 
-SAMPLE = server.Path(__file__).parent / "data" / "_MG_7191.CR2"
+DATA = server.Path(__file__).parent / "data"
 
 
-@pytest.fixture
-def raw(tmp_path):
+@pytest.fixture(params=["_MG_7191.CR2", "PA080192.ORF"])  # Canon EOS 450D, Olympus E-M10 Mark III
+def raw(request, tmp_path):
     assert server.DARKTABLE_CLI, "darktable-cli not found: run scripts/cloud-setup.sh"
-    assert SAMPLE.exists(), "sample RAW missing: run scripts/cloud-setup.sh"
-    return str(shutil.copy(SAMPLE, tmp_path))
+    assert (DATA / request.param).exists(), "sample RAW missing: run scripts/cloud-setup.sh"
+    return str(shutil.copy(DATA / request.param, tmp_path))
 
 
 def export_mean(raw: str, out: str) -> float:
