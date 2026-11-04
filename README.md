@@ -195,8 +195,10 @@ darktable 5.6.1 source and darktable-cli renders:
 - gradient: `dt_masks_point_gradient_t` in a group form (`develop/masks.h`, mask version 6), in `masks_history`;
 - the extra instances are listed in `iop_order_list` right after their base instance; without it darktable drops them.
 
-The gradient's coordinates are those of the sensor, before darktable rotates portrait shots: on a portrait shot
-turn the rotation by ±90°. A luminance range refers to the module's own input: scene-linear before the tone mapper
+darktable stores gradient coordinates in the sensor's frame, before its flip module turns portrait shots upright;
+the server maps the rotation and position back by the RAW's orientation, so rotation 0 is always the top of the image
+as displayed. Compression keeps darktable's scale: the visible transition spans about 3 × compression % of the frame
+diagonal. A luminance range refers to the module's own input: scene-linear before the tone mapper
 (exposure, tone equalizer, color balance rgb), display-referred after it (local contrast, sharpen).
 
 **What `exposure_ev = 0` means.** In its scene-referred workflows, Darktable auto-applies an exposure of +0.7 EV to every RAW and adds back any exposure bias set on the camera (a shot at −1 EV gets +1 EV). The server's exposure replaces that instance but builds on its values, so `exposure_ev` is relative to Darktable's default: 0 looks exactly like a freshly imported RAW in Darktable, and +1 is one stop brighter than that.

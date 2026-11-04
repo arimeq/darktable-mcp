@@ -43,8 +43,8 @@ Sprawdzone układy (little-endian, 5.6.1):
   odwrócona polaryzacja), feathering radius, guide (5 = input after blur), blur, contrast, brightness, details,
   feather_version 1, reserved×2, 16×4 parametry blend-if, 16 boost (Jz/Cz = -6.64385619), raster source, instance,
   raster id -1, raster invert. Wartość suwaka = param × 2^boost × 100.
-- gradient (mask_type 16) `<6fi`: anchor x/y (pełna klatka sensora), rotation (0 = maska u góry, 90 = lewo),
-  compression 0–1, steepness, curvature, state 2 (sigmoidal); grupa (mask_type 4) `<3if`: formid, parentid, state 3, opacity.
+- gradient (mask_type 16) `<6fi`: anchor x/y (pełna klatka sensora, przed flip; orientacja = `rawpy sizes.flip`, te same
+  bity co dt_image_orientation_t), rotation (0 = maska u góry sensora, 90 = lewo), compression 0–1 (erf, w przekątnych), steepness, curvature, state 2 (sigmoidal); grupa (mask_type 4) `<3if`: formid, parentid, state 3, opacity.
   Dodatkowe instancje (multi_priority > 0) wymagają `iop_order_list`, inaczej darktable je pomija.
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
