@@ -302,22 +302,32 @@ def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
     assert saturation("c") == pytest.approx(base, abs=1)
 
 
-def test_rotation_straightens_clockwise_without_black_corners(raw, tmp_path):
+def test_rotation_straightens_clockwise_keeping_tones(raw, tmp_path):
+    server.apply_adjustments(raw, contrast=15, dehaze_strength=0.15, dehaze_distance=0.3)
+    modules = lambda: re.findall(r'operation="(\w+)"[\s\S]*?:params="([0-9a-f]+)"',
+                                 server.xmp_text(server._load_or_new(raw)[1]))
+    unrotated = modules()
     base = Image.open(server.export_image(raw, output_directory=str(tmp_path / "a"), max_dimension=800)["output_path"])
     server.rotate_image(raw, 4)
+    # the same history, plus rotate and perspective and the (full-frame) crop
+    assert [m for m in modules() if m[0] not in ("ashift", "crop")] == unrotated
     r = server.export_image(raw, output_directory=str(tmp_path / "b"), max_dimension=800)
     assert "stored_but_not_rendered" not in r and "ignored_by_darktable" not in r
     rot = Image.open(r["output_path"])
     assert rot.size == pytest.approx(base.size, abs=2)
     (W, H), c, s = base.size, np.cos(np.radians(4)), np.sin(np.radians(4))
     k = min(W / (W * c + H * s), H / (W * s + H * c))  # the crop that keeps the frame's proportions
-    def match(degrees_cw):
-        sim = base.convert("L").rotate(-degrees_cw, Image.BICUBIC).crop(
-            ((W - k * W) / 2, (H - k * H) / 2, (W + k * W) / 2, (H + k * H) / 2)).resize(rot.size)
-        return np.corrcoef(np.asarray(sim, float).ravel(), np.asarray(rot.convert("L"), float).ravel())[0, 1]
-    assert match(4) > 0.95 > match(-4) + 0.2
-    corners = np.asarray(rot.convert("L"), float)
-    assert min(corners[:6, :6].mean(), corners[:6, -6:].mean(), corners[-6:, :6].mean(), corners[-6:, -6:].mean()) > 2
+    def simulated(degrees_cw):
+        return np.asarray(base.convert("L").rotate(-degrees_cw, Image.BICUBIC).crop(
+            ((W - k * W) / 2, (H - k * H) / 2, (W + k * W) / 2, (H + k * H) / 2)).resize(rot.size), float)
+    g = np.asarray(rot.convert("L"), float)
+    match = lambda sim: np.corrcoef(sim.ravel(), g.ravel())[0, 1]
+    assert match(simulated(4)) > 0.95 > match(simulated(-4)) + 0.2
+    # same tones as the unrotated render turned the same way: only interpolation noise
+    inner, sim = (slice(20, -20), slice(20, -20)), simulated(4)
+    assert abs(g[inner].mean() - sim[inner].mean()) < 1.5
+    assert np.percentile(g[inner], [5, 50, 95]) == pytest.approx(np.percentile(sim[inner], [5, 50, 95]), abs=2.5)
+    assert min(g[:6, :6].mean(), g[:6, -6:].mean(), g[-6:, :6].mean(), g[-6:, -6:].mean()) > 2
 
 
 def test_vignette_darkens_or_lightens_edges(raw, tmp_path):
