@@ -62,6 +62,7 @@ def test_darktable_accepts_every_written_module(raw, tmp_path):
     server.color_equalizer(raw, saturation={"green": 20}, hue={"red": 5}, brightness={"blue": -20})
     server.local_contrast(raw, detail=140, highlights=30, shadows=70, midtone_range=0.4)
     server.rotate_image(raw, 2)
+    server.apply_adjustments(raw, vignette=-30)
     server.export_image(raw, output_directory=str(tmp_path / "out"), max_dimension=200)
     ops = re.findall(r'darktable:operation="(\w+)"', xmp_sidecar_path(server.Path(raw)).read_text())
     assert ops
@@ -317,3 +318,17 @@ def test_rotation_straightens_clockwise_without_black_corners(raw, tmp_path):
     assert match(4) > 0.95 > match(-4) + 0.2
     corners = np.asarray(rot.convert("L"), float)
     assert min(corners[:6, :6].mean(), corners[:6, -6:].mean(), corners[-6:, :6].mean(), corners[-6:, -6:].mean()) > 2
+
+
+def test_vignette_darkens_or_lightens_edges(raw, tmp_path):
+    def edge_to_centre(name):
+        g = export_gray(raw, str(tmp_path / name))
+        h, w = g.shape
+        corners = np.mean([g[::sy, ::sx][:h // 6, :w // 6].mean() for sy in (1, -1) for sx in (1, -1)])
+        return corners / g[3 * h // 8:5 * h // 8, 3 * w // 8:5 * w // 8].mean()
+    base = edge_to_centre("a")
+    server.apply_adjustments(raw, vignette=-60)
+    dark = edge_to_centre("b")
+    server.apply_adjustments(raw, vignette=60)
+    light = edge_to_centre("c")
+    assert dark < base * 0.8 and light > base * 1.15, (dark, base, light)

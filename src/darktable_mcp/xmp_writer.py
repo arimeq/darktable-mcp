@@ -95,7 +95,7 @@ filmic sigmoid agx filmicrgb lut3d colisa tonecurve levels shadhi zonesystem glo
 colorcorrection colorcontrast velvia vibrance colorzones bloom colorize lowlight monochrome grain soften splittoning
 vignette colorreconstruct finalscale colorout clahe overexposed rawoverexposed dither borders watermark gamma"""
 
-_UNMAPPED = ("highlight_recovery", "shadow_lift", "brightness", "whites", "blacks", "vignette")
+_UNMAPPED = ("highlight_recovery", "shadow_lift", "brightness", "whites", "blacks")
 
 
 def ignored_by_darktable(edit_state: EditState) -> dict[str, str]:
@@ -249,6 +249,11 @@ def _modules(adj: AdjustmentState, masked: bool = False) -> list[tuple[str, int,
         mods.append(("sharpen", 1, struct.pack("<3f", 2.0, adj.sharpness / 100, 0.5).hex(), "", _BLENDOP))
     if adj.noise_reduction > 0:
         mods.append(("denoiseprofile", 12, _DENOISE_CHROMA, "", _BLENDOP))
+    if adj.vignette:
+        # vignette v4: fall-off start 80 %, radius 50 % (defaults), brightness = the GUI's -1..1 slider, saturation 0
+        # (brightness only), centre, automatic ratio (follows the frame), shape 1, no dithering, unbounded
+        params = struct.pack("<6fi2f2i", 80, 50, adj.vignette / 100, 0, 0, 0, 1, 1, 1, 0, 1)
+        mods.append(("vignette", 4, params.hex(), "", _BLENDOP))
     return mods
 
 

@@ -188,10 +188,11 @@ When `darktable-cli` is installed, RAW previews, histograms and exports are all 
 | clarity | local contrast (bilateral grid, GUI detail 200 % + clarity); `local_contrast` replaces it with the full module |
 | dehaze | haze removal |
 | sharpness, noise reduction | sharpen, denoise (profiled) |
+| vignette | vignette (brightness only, automatic ratio) |
 | crop | crop |
 | rotation (straightening, up to ±45°) | rotate and perspective (rotation, automatic crop to the original proportions) |
 
-Brightness, whites, blacks, vignette, highlight recovery and shadow lift are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
+Brightness, whites, blacks, highlight recovery and shadow lift are not mapped yet: they are stored, but darktable renders ignore them, and the tools say so.
 
 **Masked adjustments.** Each one becomes an extra instance of every module its adjustments map to (e.g. a second
 local contrast for "clarity in the sky"), after the global one in the pipe, blended in RGB (scene) through its own

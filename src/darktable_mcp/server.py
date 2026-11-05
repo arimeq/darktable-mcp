@@ -314,7 +314,8 @@ def apply_adjustments(
     noise_reduction : float
         Noise reduction strength (0 to 100).
     vignette : float
-        [not rendered] Vignette: negative values darken edges, positive lighten (-100 to +100).
+        Vignette: negative darkens the edges, positive lightens them (-100 to +100 = darktable vignette
+        brightness -1 to 1, following the frame's proportions, colours untouched).
     clarity : float
         Local contrast (-100 to +100): darktable local contrast, bilateral grid, with its detail slider at
         200 % + clarity (100 % = unchanged, darktable's default 125 %), so even +10 is strong and +25 shows

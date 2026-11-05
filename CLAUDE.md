@@ -54,6 +54,8 @@ Sprawdzone układy (little-endian, 5.6.1):
 - ashift v5 `<8f2i4f200fi8f` (892 B): rotation (= −stopnie zgodnie z zegarem; GUI pokazuje −p), lens shift v/h, shear,
   f 28, crop factor 1, orthocorr 100, aspect 1, mode 0, cropmode 2; cl/cr/ct/cb liczy GUI, nie potok, więc wpisujemy
   sami (obrót czysty: bbox obróconej klatki, prostokąt o proporcjach oryginału). Przed flip: wymiary sensora.
+- vignette v4 `<6fi2f2i` (44 B): scale 80, falloff 50, brightness (GUI −1…1), saturation, center x/y, autoratio,
+  whratio, shape, dithering, unbound.
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 
