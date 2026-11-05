@@ -346,7 +346,9 @@ def apply_adjustments(
         halos.  For finer control use local_contrast, which replaces this.
     dehaze_strength : float
         darktable "haze removal" strength (-1 to +1, GUI default 0.2). 0 = off; negative adds haze.
-        Only useful on genuinely hazy/foggy scenes; it is not a contrast tool.
+        Only useful on genuinely hazy/foggy scenes; it is not a contrast tool.  darktable 5.6.1's haze removal
+        can leave black or striped blocks along an edge the crop cuts into (seen in the darktable GUI too):
+        check that edge of the export.
     dehaze_distance : float
         How deep into the scene haze is removed (0 = foreground only, 1 = whole image; default 0.2).
     """
@@ -660,7 +662,7 @@ def darktable_style(image_path: str, name: Optional[str] = None, remove: bool = 
         path, state = _load_or_new(image_path)
     except FileNotFoundError as e:
         return {"error": str(e)}
-    styles = {raw: (raw.replace("_l10n_", ""), desc) for raw, desc in
+    styles = {raw: (raw.replace("_l10n_", ""), desc.replace("_l10n_", "")) for raw, desc in
               _query_styles("SELECT name, description FROM styles ORDER BY name")}
     if remove or name:
         raw = next((r for r, (shown, _) in styles.items() if name in (r, shown)), None)
@@ -690,7 +692,8 @@ _MASK_DOC = """
     adjustments : dict
         Same names and scales as apply_adjustments: exposure_ev, black_level, contrast, highlights, shadows,
         saturation, vibrance, clarity, sharpness, dehaze_strength, dehaze_distance.  exposure_ev here is
-        relative to the image the instance receives (no +0.7 EV default).
+        relative to the image the instance receives (no +0.7 EV default).  dehaze: see apply_adjustments
+        (black or striped blocks along a cropped edge).
     mask : dict, any combination of (all present parts must match: drawn × parametric):
         gradient : {rotation, offset, compression}
             Drawn gradient on the full uncropped frame, upright as displayed (portrait shots included).

@@ -291,7 +291,7 @@ def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
         con.execute("INSERT INTO style_items VALUES (?, 0, 5, 'colorbalancergb', ?, 1, ?, 14, 0, 'mono', 1)",
                     (sid, xmp_writer._color_balance(-100, 0, 0), blend))
     shown = server.darktable_style(raw)["styles"]
-    assert shown["mono"] == "test" and not any("_l10n_" in n or "camera styles" in n for n in shown)
+    assert shown["mono"] == "test" and not any("_l10n_" in n + d or "camera styles" in n for n, d in shown.items())
     assert "darktable|examples|colors|autumn" in shown
     assert len(server.darktable_style(raw, camera_styles=True)["styles"]) > len(shown) + 400
     assert "error" in server.darktable_style(raw, "nope")
@@ -338,6 +338,17 @@ def test_style_overlapping_our_modules_is_reported(raw, tmp_path, monkeypatch):
     assert r["style_overlap"] == {"added_on_top": ["exposure"], "second_tone_mapper": ["filmicrgb"]}
     server.apply_adjustments(raw, exposure_ev=0)
     assert "style_overlap" not in server.darktable_style(raw, "off")  # no exposure of ours left to meet
+
+
+def test_unrotated_dehaze_render_unchanged(raw, tmp_path):
+    # mean and 5/50/95 percentiles rendered by the code before rotation was rendered (8a8e6d5)
+    golden = {"_MG_7191.CR2": (114.02, [80, 111, 183]), "PA080192.ORF": (124.05, [43, 135, 180])}
+    server.apply_adjustments(raw, contrast=15, dehaze_strength=0.15, dehaze_distance=0.3)
+    server.crop_image(raw, 0, 0, 1, 0.9)
+    r = server.export_image(raw, output_directory=str(tmp_path), max_dimension=800)
+    g = np.asarray(Image.open(r["output_path"]).convert("L"), float)
+    mean, percentiles = golden[server.Path(raw).name]
+    assert g.mean() == pytest.approx(mean, abs=1) and list(np.percentile(g, [5, 50, 95])) == pytest.approx(percentiles, abs=2)
 
 
 def test_rotation_straightens_clockwise_keeping_tones(raw, tmp_path):
