@@ -61,6 +61,7 @@ def test_darktable_accepts_every_written_module(raw, tmp_path):
     server.tone_mapper(raw, contrast=1.8, skew=-0.2, white_target=95, hue_preservation=80)
     server.color_equalizer(raw, saturation={"green": 20}, hue={"red": 5}, brightness={"blue": -20})
     server.local_contrast(raw, detail=140, highlights=30, shadows=70, midtone_range=0.4)
+    server.rotate_image(raw, 2)
     server.export_image(raw, output_directory=str(tmp_path / "out"), max_dimension=200)
     ops = re.findall(r'darktable:operation="(\w+)"', xmp_sidecar_path(server.Path(raw)).read_text())
     assert ops
@@ -298,3 +299,21 @@ def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
     assert saturation("b") < base * 0.2
     server.darktable_style(raw, remove=True)
     assert saturation("c") == pytest.approx(base, abs=1)
+
+
+def test_rotation_straightens_clockwise_without_black_corners(raw, tmp_path):
+    base = Image.open(server.export_image(raw, output_directory=str(tmp_path / "a"), max_dimension=800)["output_path"])
+    server.rotate_image(raw, 4)
+    r = server.export_image(raw, output_directory=str(tmp_path / "b"), max_dimension=800)
+    assert "stored_but_not_rendered" not in r and "ignored_by_darktable" not in r
+    rot = Image.open(r["output_path"])
+    assert rot.size == pytest.approx(base.size, abs=2)
+    (W, H), c, s = base.size, np.cos(np.radians(4)), np.sin(np.radians(4))
+    k = min(W / (W * c + H * s), H / (W * s + H * c))  # the crop that keeps the frame's proportions
+    def match(degrees_cw):
+        sim = base.convert("L").rotate(-degrees_cw, Image.BICUBIC).crop(
+            ((W - k * W) / 2, (H - k * H) / 2, (W + k * W) / 2, (H + k * H) / 2)).resize(rot.size)
+        return np.corrcoef(np.asarray(sim, float).ravel(), np.asarray(rot.convert("L"), float).ravel())[0, 1]
+    assert match(4) > 0.95 > match(-4) + 0.2
+    corners = np.asarray(rot.convert("L"), float)
+    assert min(corners[:6, :6].mean(), corners[:6, -6:].mean(), corners[-6:, :6].mean(), corners[-6:, -6:].mean()) > 2

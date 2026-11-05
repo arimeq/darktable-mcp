@@ -17,7 +17,7 @@ from mcp.server.mcpserver import Image, MCPServer
 from .edits import (HUES, ColorEqualizerState, CropState, EditState, GraduatedState, LocalContrastState,
                     MaskedAdjustment, MaskState, SigmoidState)
 from .processor import ALL_EXTENSIONS, RAW_EXTENSIONS, ImageProcessor
-from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_flip,
+from .xmp_writer import (MASKABLE, TURN, foreign_edits, foreign_sidecar, ignored_by_darktable, raw_geometry,
                          xmp_sidecar_path, xmp_text)
 
 mcp = MCPServer("DarktableMCP")
@@ -43,7 +43,7 @@ def _load_or_new(image_path: str) -> tuple[Path, EditState]:
     if state.version < 2:
         # Older gradients were stored in the sensor's frame: turning them by the same angle keeps them in place
         if gradients := [m.mask.gradient for m in state.masked if m.mask.gradient]:
-            turn = TURN[raw_flip(path)]
+            turn = TURN[raw_geometry(path)[0]]
             for g in gradients:
                 g.rotation -= turn
         state.version = 2
@@ -439,10 +439,10 @@ def crop_image(
 def rotate_image(image_path: str, degrees: float) -> dict:
     """Rotate / straighten the image by *degrees* (clockwise).
 
-    Positive = clockwise, negative = counter-clockwise.
-    Typical use: small corrections like +0.5 or -1.2 to straighten horizons.
-    Large rotations (90, 180, 270) are also supported.
-    Not rendered yet for RAWs exported via darktable-cli (stored only; the result warns).
+    Positive = clockwise, negative = counter-clockwise.  Typical use: small corrections like +0.5 or -1.2 to
+    straighten horizons.  darktable renders it with "rotate and perspective" (as its GUI rotation slider, which
+    shows the same number), cropped to the largest rectangle of the original proportions so no corners are
+    empty; crop_image then crops within that straightened frame.  Only up to ±45° is rendered.
     """
     try:
         path, state = _load_or_new(image_path)

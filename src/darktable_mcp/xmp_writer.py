@@ -104,8 +104,8 @@ def ignored_by_darktable(edit_state: EditState) -> dict[str, str]:
     ignored = {k: "no darktable module mapped yet" for k in _UNMAPPED if getattr(adj, k) != getattr(default, k)}
     if adj.tint and adj.temperature_kelvin is None:
         ignored["tint"] = "only applied together with temperature_kelvin"
-    if edit_state.crop and edit_state.crop.rotation:
-        ignored["rotation"] = "no darktable module mapped yet"
+    if edit_state.crop and abs(edit_state.crop.rotation) > 45:
+        ignored["rotation"] = "only straightening up to ±45° is rendered (rotate and perspective)"
     return ignored
 
 
@@ -283,19 +283,36 @@ def _blendop_masked(mask: MaskState, group_id: int) -> str:
                        b"", 0, -1, 0).hex()
 
 
-def raw_flip(src: Path) -> int:
-    """The RAW's orientation as darktable's dt_image_orientation_t (common/image.h).
+def raw_geometry(src: Path) -> tuple[int, int, int]:
+    """(orientation as darktable's dt_image_orientation_t, sensor width, sensor height) of a RAW.
 
-    LibRaw's flip has the same bits except the two quarter turns, which are swapped: EXIF 6 (turn clockwise)
-    is LibRaw 6 but darktable 5 (ORIENTATION_ROTATE_CW_90_DEG).
+    LibRaw's flip has the same bits as darktable's orientation except the two quarter turns, which are swapped:
+    EXIF 6 (turn clockwise) is LibRaw 6 but darktable 5 (ORIENTATION_ROTATE_CW_90_DEG).
     """
     import rawpy
     with rawpy.imread(str(src)) as raw:
-        return {5: 6, 6: 5}.get(raw.sizes.flip, raw.sizes.flip)
+        return {5: 6, 6: 5}.get(raw.sizes.flip, raw.sizes.flip), raw.sizes.width, raw.sizes.height
 
 
 # Degrees the sensor frame is turned against the upright image, per darktable orientation (5 = clockwise turn).
 TURN = {0: 0, 3: 180, 5: 90, 6: -90}
+
+
+def _ashift(degrees: float, w: int, h: int) -> bytes:
+    """ashift v5 (rotate and perspective) straightening by *degrees*, clockwise.
+
+    The GUI computes the automatic crop and stores it in cl/cr/ct/cb; the pipe only applies it (ashift.c
+    _do_crop vs modify_roi_out), so it is computed here: with no lens shift or shear the homography is a pure
+    rotation, its output the rotated frame's bounding box, and the crop the largest centred rectangle of the
+    original proportions inside it ("original format").  ashift runs before flip, so w/h are the sensor's.
+    """
+    c, s = abs(math.cos(math.radians(degrees))), abs(math.sin(math.radians(degrees)))
+    k = min(w / (w * c + h * s), h / (w * s + h * c))
+    x, y = k * w / (2 * (w * c + h * s)), k * h / (2 * (w * s + h * c))
+    # rotation (the GUI shows its negation), lens shifts, shear 0, focal length 28, crop factor 1, lens dependence
+    # 100 %, aspect 1, generic lens model, crop mode original format, crop box, no saved lines
+    return struct.pack("<8f2i4f200fi8f", -degrees, 0, 0, 0, 28, 1, 100, 1, 0, 2,
+                       0.5 - x, 0.5 + x, 0.5 - y, 0.5 + y, *[0.0] * 200, 0, *[0.0] * 8)
 
 
 def _gradient_points(g: GradientMask, flip: int) -> bytes:
@@ -339,7 +356,7 @@ def xmp_text(edit_state: EditState) -> str:
                              *[1 + c.brightness.get(h, 0) / 100 for h in HUES], 0.0)
         mods.append(("colorequal", 4, params.hex(), "", _BLENDOP_SCENE, 0))
     forms, instances = [], {}
-    flip = raw_flip(edit_state.source_path) if any(m.mask.gradient for m in edit_state.masked) else 0
+    flip = raw_geometry(edit_state.source_path)[0] if any(m.mask.gradient for m in edit_state.masked) else 0
     for n, m in enumerate(edit_state.masked):
         gradient_id = 2000 + n if m.mask.gradient else 0
         if gradient_id:
@@ -352,7 +369,10 @@ def xmp_text(edit_state: EditState) -> str:
                 forms.append((group_id, 4, f"grp {op} {m.label}", struct.pack("<3if", gradient_id, group_id, 3, 1.0).hex(), 1))
             instances[op] = instances.get(op, 0) + 1
             mods.append((op, ver, params, escape(m.label, {'"': "&quot;"}), _blendop_masked(m.mask, group_id), instances[op]))
-    if crop := edit_state.crop:
+    if (crop := edit_state.crop) and 0 < abs(crop.rotation) <= 45:
+        mods.append(("ashift", 5, _ashift(crop.rotation, *raw_geometry(edit_state.source_path)[1:]).hex(), "",
+                     _BLENDOP, 0))
+    if crop:
         # crop v3: left, top, right, bottom (normalised), ratio_d/ratio_n 0 = freehand
         params = struct.pack("<4f2i", crop.left, crop.top, crop.right, crop.bottom, 0, 0)
         mods.append(("crop", 3, params.hex(), "", _BLENDOP, 0))

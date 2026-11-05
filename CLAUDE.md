@@ -51,6 +51,9 @@ Sprawdzone układy (little-endian, 5.6.1):
 - sigmoid wpisany z multi_name `_builtin_scene-referred default` zastępuje auto-applied (render z domyślnymi = bez wpisu).
 - bilat v3 `<i4f`: mode (1 = local laplacian), sigma_r = highlights, sigma_s = shadows, detail (0 = bez zmiany;
   GUI (p + 1) × 100 %), midtone range. `clarity` pisze detail 1 + clarity/100, czyli w GUI 200 % + clarity.
+- ashift v5 `<8f2i4f200fi8f` (892 B): rotation (= −stopnie zgodnie z zegarem; GUI pokazuje −p), lens shift v/h, shear,
+  f 28, crop factor 1, orthocorr 100, aspect 1, mode 0, cropmode 2; cl/cr/ct/cb liczy GUI, nie potok, więc wpisujemy
+  sami (obrót czysty: bbox obróconej klatki, prostokąt o proporcjach oryginału). Przed flip: wymiary sensora.
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 
