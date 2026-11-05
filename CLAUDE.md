@@ -61,6 +61,9 @@ Sprawdzone układy (little-endian, 5.6.1):
 - graduatednd v1 `<6f`: density EV, hardness %, rotation, offset %, hue, saturation. Rotacja 0 przyciemnia górę;
   suwak w GUI pokazuje -rotation.
 
+- Rastry (JPG z aparatu) otwiera `_process_raster` z `ImageOps.exif_transpose`: piony to poziome piksele + tag
+  Orientation, a crop/region liczymy w kadrze pionowym jak darktable. Próbki: `tests/portrait/` (Canon R8, CR3 + JPG).
+
 ## Wygląd (domyślne wartości, które użytkownik akceptuje)
 
 - Sigmoid zamiast filmic; kontrast z domyślnego 1,5, głębia przez lekki black w exposure (+0,005…+0,02).

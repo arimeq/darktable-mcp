@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter, ImageDraw
+from PIL import Image, ImageEnhance, ImageFilter, ImageDraw, ImageOps
 
 from .edits import EditState, AdjustmentState, CropState, GraduatedState
 
@@ -284,6 +284,8 @@ class ImageProcessor:
                     info["width"] = img.width
                     info["height"] = img.height
                     info["mode"] = img.mode
+                    info["orientation"] = img.getexif().get(274, 1)
+                    info["upright_size"] = list(ImageOps.exif_transpose(img).size)
                     exif = img.getexif() if hasattr(img, "getexif") else {}
                     if exif:
                         # Common EXIF tag IDs
@@ -325,7 +327,9 @@ class ImageProcessor:
         return Image.fromarray(rgb)
 
     def _process_raster(self, adj: AdjustmentState) -> Image.Image:
-        img = Image.open(self.path).convert("RGB")
+        # Camera JPEGs store portraits as landscape pixels plus an EXIF Orientation tag; crops and regions
+        # are in the upright frame the user sees, as in darktable renders
+        img = ImageOps.exif_transpose(Image.open(self.path)).convert("RGB")
 
         # Exposure via brightness multiplier
         if adj.exposure_ev != 0.0:

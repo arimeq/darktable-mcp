@@ -14,7 +14,7 @@ import subprocess
 
 import numpy as np
 import pytest
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageOps
 
 from darktable_mcp import server, xmp_writer
 from darktable_mcp.xmp_writer import xmp_sidecar_path
@@ -391,3 +391,21 @@ def test_vignette_darkens_or_lightens_edges(raw, tmp_path):
     server.apply_adjustments(raw, vignette=60)
     light = edge_to_centre("c")
     assert dark < base * 0.8 and light > base * 1.15, (dark, base, light)
+
+
+@pytest.mark.parametrize("shot", ["IMG_6401", "IMG_6486"])  # Canon EOS R8 portraits: landscape pixels + Orientation 8
+def test_camera_jpeg_follows_exif_orientation(shot, tmp_path):
+    cr3, jpg = (shutil.copy(DATA.parent / "portrait" / f"{shot}.{e}", tmp_path) for e in ("CR3", "JPG"))
+    upright = ImageOps.exif_transpose(Image.open(jpg)).convert("L")
+    for region, box in ((None, (0, 0, 1984, 2976)), ([0.2, 0.1, 0.3, 0.3], (397, 298, 992, 1190))):
+        _, img = server.get_image_preview(jpg, max_size=3000, region=region)
+        got = Image.open(io.BytesIO(img.data)).convert("L")
+        assert got.size == pytest.approx((box[2] - box[0], box[3] - box[1]), abs=2)
+        assert np.abs(np.asarray(got.resize((60, 90)), float) - np.asarray(upright.crop(box).resize((60, 90)))).mean() < 3
+    text, img = server.compare_images(cr3, jpg, max_size=600)
+    side = Image.open(io.BytesIO(img.data))
+    assert '"rendered_via": "darktable-cli"' in text and side.size == pytest.approx((2 * 400 + 8, 600), abs=4)
+    server.crop_image(jpg, left=0, top=0, right=1, bottom=0.5)
+    _, img = server.get_image_preview(jpg, max_size=3000)
+    assert Image.open(io.BytesIO(img.data)).size == (1984, 1488)
+    assert server.get_image_info(jpg)["upright_size"] == [1984, 2976]
