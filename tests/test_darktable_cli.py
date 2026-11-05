@@ -113,7 +113,7 @@ def test_mask_preview_shows_gradient(raw):
     mid = server.add_masked_adjustment(raw, {"clarity": 20}, {"gradient": {"rotation": 90, "compression": 5}})["id"]
     server.add_masked_adjustment(raw, {"saturation": 20}, {"hue": [200, 220, 280, 300]})
     out = server.export_mask_preview(raw, mid, max_size=400)
-    assert len(out) == 2 and "local contrast" in out[0], out
+    assert len(out) == 2 and out[0].endswith(f"• {mid}"), out  # module name is in darktable's UI language
     m = np.asarray(Image.open(io.BytesIO(out[1].data)), float)
     w = m.shape[1] // 4
     assert m[:, :w].mean() > 200 and m[:, -w:].mean() < 50  # rotation 90 = left
@@ -310,6 +310,34 @@ def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
     assert saturation("b") < base * 0.2
     server.darktable_style(raw, remove=True)
     assert saturation("c") == pytest.approx(base, abs=1)
+
+
+def test_style_overlapping_our_modules_is_reported(raw, tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    cfg = tmp_path / "appdata" / "darktable"
+    cfg.mkdir(parents=True)
+    (cfg / "darktablerc").write_text("plugins/darkroom/workflow=scene-referred (sigmoid)\n")
+    subprocess.run([server.DARKTABLE_CLI, raw, (tmp_path / "init.jpg").as_posix(), "--width", "50", "--height", "50",
+                    "--core", "--configdir", cfg.as_posix(), "--library", ":memory:"], capture_output=True, timeout=600)
+    blend = zlib.decompress(base64.b64decode(xmp_writer._BLENDOP_SCENE[4:]))
+    plus1 = struct.pack("<i4f2i", 0, 0, 1.0, 50, -4, 0, 1)  # exposure v7: +1 EV, no camera bias compensation
+    with sqlite3.connect(cfg / "data.db") as con:
+        for name, items in {"on": [("exposure", 7, plus1, 1), ("filmicrgb", 4, b"", 1)],
+                            "up": [("exposure", 7, plus1, 1)], "off": [("exposure", 7, plus1, 0)]}.items():
+            sid = con.execute("INSERT INTO styles (name, description) VALUES (?, '')", (name,)).lastrowid
+            con.executemany("INSERT INTO style_items VALUES (?, ?, ?, ?, ?, ?, ?, 14, 0, '', 0)",
+                            [(sid, n, ver, op, p, on, blend) for n, (op, ver, p, on) in enumerate(items)])
+    server.apply_adjustments(raw, exposure_ev=0.5)
+    mean = lambda d: export_mean(raw, str(tmp_path / d))
+    ours = mean("ours")
+    assert server.darktable_style(raw, "up")["style_overlap"] == {"added_on_top": ["exposure"]}
+    assert mean("up") > ours * 1.2  # +1 EV on top of ours
+    assert server.darktable_style(raw, "off")["style_overlap"] == {"replaces_ours": ["exposure"]}
+    assert mean("off") < ours * 0.8  # our exposure (and darktable's default +0.7 EV) switched off
+    r = server.darktable_style(raw, "on")
+    assert r["style_overlap"] == {"added_on_top": ["exposure"], "second_tone_mapper": ["filmicrgb"]}
+    server.apply_adjustments(raw, exposure_ev=0)
+    assert "style_overlap" not in server.darktable_style(raw, "off")  # no exposure of ours left to meet
 
 
 def test_rotation_straightens_clockwise_keeping_tones(raw, tmp_path):

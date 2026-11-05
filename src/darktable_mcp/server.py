@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -70,7 +71,24 @@ def _darktable_notes(path: Path, state: EditState) -> dict:
         notes |= {"ignored_by_darktable": ignored,
                   "warning": "These edits are stored but have no effect on the preview or export; "
                              "changing them further does nothing."}
-    return notes
+    return notes | (_style_overlap(state) if state.style else {})
+
+
+def _style_overlap(state: EditState) -> dict:
+    """The style's modules that meet this server's. darktable-cli appends a style (imageio.c, history.c
+    dt_history_merge_module_into_history): an enabled item becomes a new instance on top of ours, a disabled one
+    or a one-instance module (crop, ashift) replaces ours."""
+    ours = set(re.findall(r'operation="(\w+)"', xmp_text(state))) | {"sigmoid"}  # the workflow auto-applies sigmoid
+    items = set(_query_styles("SELECT i.operation, i.enabled FROM style_items i JOIN styles s ON s.id = i.styleid"
+                              " WHERE s.name = ?", state.style))
+    stacked = sorted({op for op, on in items if on and op in ours - {"crop", "ashift"}})
+    overlap = {"added_on_top": stacked, "replaces_ours": sorted({op for op, _ in items if op in ours} - set(stacked)),
+               "second_tone_mapper": sorted({op for op, on in items if on and op in ("filmicrgb", "agx", "basecurve")})}
+    return {"style_overlap": {k: v for k, v in overlap.items() if v},
+            "style_note": "Modules of the style that meet this server's edits. added_on_top: the style's instance runs "
+                          "after ours, so both apply and the effects add up (a second sigmoid tone-maps twice). "
+                          "replaces_ours: the style's settings (or 'off') win over ours. second_tone_mapper: a tone "
+                          "mapper on top of the sigmoid that is always applied."} if any(overlap.values()) else {}
 
 
 def _render_xmp(path: Path, state: EditState, tmp: str, persist: bool) -> Path:

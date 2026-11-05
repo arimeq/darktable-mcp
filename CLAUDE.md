@@ -48,6 +48,8 @@ Sprawdzone układy (little-endian, 5.6.1):
   Dodatkowe instancje (multi_priority > 0) wymagają `iop_order_list`, inaczej darktable je pomija.
 - colorequal v4 `<6fi25f` (128 B): threshold 0.1, hue curve 1, contrast 0, white level 1, chroma size 1.5, param size 1,
   use_filter 1; 8× sat, 8× hue °, 8× bright (red…magenta), hue_shift. GUI: sat/bright = (p − 1) × 100 %.
+- `darktable-cli --style` dokleja styl (imageio.c, `style_append`): włączony moduł stylu = nowa instancja na wierzchu
+  naszej (efekty się sumują), wyłączony albo jednoinstancyjny (crop, ashift) zastępuje naszą.
 - sigmoid wpisany z multi_name `_builtin_scene-referred default` zastępuje auto-applied (render z domyślnymi = bez wpisu).
 - bilat v3 `<i4f`: mode (1 = local laplacian), sigma_r = highlights, sigma_s = shadows, detail (0 = bez zmiany;
   GUI (p + 1) × 100 %), midtone range. `clarity` pisze detail 1 + clarity/100, czyli w GUI 200 % + clarity.
