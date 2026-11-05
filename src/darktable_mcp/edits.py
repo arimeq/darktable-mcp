@@ -140,6 +140,7 @@ class EditState:
     sigmoid: Optional[SigmoidState] = None
     color_eq: Optional[ColorEqualizerState] = None
     local_contrast: Optional[LocalContrastState] = None
+    style: Optional[str] = None  # name of a darktable style applied at render (darktable-cli --style)
     masked: list[MaskedAdjustment] = field(default_factory=list)
     output_name: Optional[str] = None  # stem only, no extension
     # 2: gradient masks are upright (before: in the sensor's frame, which differs on portrait shots)
@@ -171,6 +172,7 @@ class EditState:
         state.sigmoid = SigmoidState(**data["sigmoid"]) if data.get("sigmoid") else None
         state.color_eq = ColorEqualizerState(**data["color_eq"]) if data.get("color_eq") else None
         state.local_contrast = LocalContrastState(**data["local_contrast"]) if data.get("local_contrast") else None
+        state.style = data.get("style")
         state.masked = [MaskedAdjustment(**m) for m in data.get("masked", [])]
         state.output_name = data.get("output_name")
         state.version = data.get("version", 1)
@@ -207,6 +209,7 @@ class EditState:
             self.sigmoid is not None,
             self.color_eq is not None,
             self.local_contrast is not None,
+            self.style is not None,
             bool(self.masked),
             self.output_name is not None,
         ])
@@ -219,6 +222,7 @@ class EditState:
             "sigmoid": asdict(self.sigmoid) if self.sigmoid else None,
             "color_eq": asdict(self.color_eq) if self.color_eq else None,
             "local_contrast": asdict(self.local_contrast) if self.local_contrast else None,
+            "style": self.style,
             "masked": [asdict(m) for m in self.masked],
             "output_name": self.output_name,
             "version": self.version,

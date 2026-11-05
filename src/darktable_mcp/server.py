@@ -93,7 +93,7 @@ def _render(path: Path, state: EditState, max_size: int) -> tuple:
     with tempfile.TemporaryDirectory() as tmp:
         dst = Path(tmp, "preview.jpg")
         xmp = _render_xmp(path, state, tmp, False)
-        result = _export_via_darktable_cli(path, dst, xmp, 90, max_size)
+        result = _export_via_darktable_cli(path, dst, xmp, 90, max_size, style=state.style)
         if result["status"] == "ok":
             # Fingerprint of the exact history rendered: a repeated result with an old hash after an edit was
             # replayed by the client, not rendered here (nothing in this server caches renders).
@@ -621,6 +621,33 @@ def local_contrast(
     return {"status": "ok", "edits": state.to_dict()} | _darktable_notes(path, state)
 
 
+@mcp.tool()
+def darktable_style(image_path: str, name: Optional[str] = None, remove: bool = False) -> dict:
+    """Apply one of the user's own darktable styles (built in the darktable GUI) on top of this server's edits.
+
+    Without *name*: list the styles in the user's darktable data.db.  With *name*: previews and exports append
+    that style to the history, as darktable-cli --style does (the XMP sidecar keeps only this server's edits).
+    *remove*: stop applying it.  Use it to start from a base look the user made in the GUI.
+    """
+    import sqlite3
+    from contextlib import closing
+    try:
+        path, state = _load_or_new(image_path)
+    except FileNotFoundError as e:
+        return {"error": str(e)}
+    db, styles = _user_config() / "data.db", {}
+    if db.exists():
+        with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as con:
+            styles = dict(con.execute("SELECT name, description FROM styles ORDER BY name").fetchall())
+    if remove or name:
+        if name and name not in styles:
+            return {"error": f"No darktable style {name!r} in {db}", "styles": styles}
+        state.style = None if remove else name
+        state.save()
+        return {"status": "ok", "style": state.style} | _darktable_notes(path, state)
+    return {"styles": styles, "current": state.style, "data_db": str(db)}
+
+
 _MASK_DOC = """
     Masked adjustment: an extra darktable instance of each module the adjustments map to, blended through its
     own mask (drawn & parametric, blend colour space RGB (scene)), on top of the global edit.
@@ -765,7 +792,8 @@ def export_mask_preview(image_path: str, id: Optional[str] = None, max_size: int
     labels = [m.label for m in state.masked if id in (None, m.id)]
     with tempfile.TemporaryDirectory() as tmp:
         dst = Path(tmp, "masks.tif")
-        result = _export_via_darktable_cli(path, dst, _render_xmp(path, state, tmp, False), 90, max_size, True)
+        result = _export_via_darktable_cli(path, dst, _render_xmp(path, state, tmp, False), 90, max_size, True,
+                                            state.style)
         if result["status"] != "ok":
             return [f"Error: darktable-cli failed: {result}"]
         out = []
@@ -959,7 +987,7 @@ def export_image(
         except Exception as exc:
             xmp_path, xmp_info = None, {"xmp_note": f"XMP write failed: {exc}"}
         if use_darktable_cli and DARKTABLE_CLI and is_raw:
-            result = _export_via_darktable_cli(path, out_path, xmp_path, quality, max_dimension)
+            result = _export_via_darktable_cli(path, out_path, xmp_path, quality, max_dimension, style=state.style)
             if result.get("status") == "ok":
                 return result | {"format": format} | xmp_info | _darktable_notes(path, state)
             cli_error = result
@@ -990,20 +1018,25 @@ def export_image(
     } | xmp_info | ({"darktable_cli_error": cli_error} if cli_error else {})
 
 
+def _user_config() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", Path.home() / ".config")) / "darktable"
+
+
 def _export_via_darktable_cli(
-    src: Path, dst: Path, xmp: Optional[Path], quality: int, max_dimension: Optional[int], masks: bool = False
+    src: Path, dst: Path, xmp: Optional[Path], quality: int, max_dimension: Optional[int], masks: bool = False,
+    style: Optional[str] = None,
 ) -> dict:
     # Throwaway configdir seeded with the user's darktablerc (workflow) and data.db (presets/styles);
     # in-memory library so the user's library.db is never touched.
     with tempfile.TemporaryDirectory() as cfg:
-        user_cfg = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".config")) / "darktable"
         for name in ("darktablerc", "data.db"):
-            if (user_cfg / name).exists():
-                shutil.copy2(user_cfg / name, cfg)
+            if (_user_config() / name).exists():
+                shutil.copy2(_user_config() / name, cfg)
         size = str(max_dimension or 0)
         # darktable-cli drops backslashes, so pass forward-slash paths
         cmd = [DARKTABLE_CLI, src.as_posix(), *([xmp.as_posix()] if xmp else []), dst.as_posix(),
                "--width", size, "--height", size, "--hq", "true", "--export_masks", str(masks).lower(),
+               *(["--style", style] if style else []),
                "--core", "--configdir", Path(cfg).as_posix(), "--library", ":memory:",
                "--conf", f"plugins/imageio/format/jpeg/quality={quality}"]
         try:
@@ -1063,7 +1096,7 @@ def get_histogram(image_path: str) -> dict:
 
 @mcp.tool()
 def copy_settings(source_image_path: str, target_image_path: str) -> dict:
-    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, color equalizer, local contrast, masked adjustments) from one image to another.
+    """Copy all edit settings (adjustments, crop, graduated filter, tone mapper, color equalizer, local contrast, style, masked adjustments) from one image to another.
 
     Useful for batch-editing a set of photos shot under the same conditions.
     The output_name is NOT copied — each image keeps its own name.
@@ -1081,6 +1114,7 @@ def copy_settings(source_image_path: str, target_image_path: str) -> dict:
     tgt_state.sigmoid = replace(src_state.sigmoid) if src_state.sigmoid else None
     tgt_state.color_eq = deepcopy(src_state.color_eq)
     tgt_state.local_contrast = deepcopy(src_state.local_contrast)
+    tgt_state.style = src_state.style
     tgt_state.masked = deepcopy(src_state.masked)
     tgt_state.save()
 

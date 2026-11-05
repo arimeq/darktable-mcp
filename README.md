@@ -149,6 +149,7 @@ Claude will:
 | `add_masked_adjustment` | Adjustments only where a mask selects: drawn gradient and/or luminance, hue, chroma ranges |
 | `update_masked_adjustment`, `remove_masked_adjustment`, `list_masked_adjustments` | Manage masked adjustments |
 | `export_mask_preview` | Render the masks darktable computes (white = full effect) |
+| `darktable_style` | List the user's darktable styles, or apply one on top of the edits in previews and exports |
 | `rename_output` | Set the export filename |
 | `export_image` | Export to JPEG / PNG / TIFF (`overwrite` replaces a file of the same name) |
 | `reset_edits` | Undo everything, back to original |

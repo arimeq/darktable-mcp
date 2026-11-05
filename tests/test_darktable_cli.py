@@ -2,11 +2,14 @@
 
 Run scripts/cloud-setup.sh first; it fetches darktable-cli and the samples into tests/data.
 """
+import base64
 import io
 import json
 import re
 import shutil
+import sqlite3
 import struct
+import zlib
 import subprocess
 
 import numpy as np
@@ -270,3 +273,28 @@ def test_renders_follow_edits_after_export(raw, tmp_path):
     after = renders()
     assert before[0] == before[1] != after[0] == after[1]
     assert after[2] < before[2] - 20 and after[3] < before[3] - 20 and after[4] != before[4]
+
+
+def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
+    # a user config whose data.db holds a style "mono": color balance rgb at chroma -100 %
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    cfg = tmp_path / "appdata" / "darktable"
+    cfg.mkdir(parents=True)
+    (cfg / "darktablerc").write_text("plugins/darkroom/workflow=scene-referred (sigmoid)\n")
+    subprocess.run([server.DARKTABLE_CLI, raw, (tmp_path / "init.jpg").as_posix(), "--width", "50", "--height", "50",
+                    "--core", "--configdir", cfg.as_posix(), "--library", ":memory:"], capture_output=True, timeout=600)
+    blend = zlib.decompress(base64.b64decode(xmp_writer._BLENDOP_SCENE[4:]))
+    with sqlite3.connect(cfg / "data.db") as con:
+        sid = con.execute("INSERT INTO styles (name, description) VALUES ('mono', 'test')").lastrowid
+        con.execute("INSERT INTO style_items VALUES (?, 0, 5, 'colorbalancergb', ?, 1, ?, 14, 0, 'mono', 1)",
+                    (sid, xmp_writer._color_balance(-100, 0, 0), blend))
+    assert server.darktable_style(raw)["styles"]["mono"] == "test"
+    assert "error" in server.darktable_style(raw, "nope")
+    def saturation(name):
+        r = server.export_image(raw, output_directory=str(tmp_path / name), max_dimension=300)
+        return np.asarray(Image.open(r["output_path"]).convert("HSV"), float)[..., 1].mean()
+    base = saturation("a")
+    server.darktable_style(raw, "mono")
+    assert saturation("b") < base * 0.2
+    server.darktable_style(raw, remove=True)
+    assert saturation("c") == pytest.approx(base, abs=1)
