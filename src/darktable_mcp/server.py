@@ -6,8 +6,10 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
+from contextlib import closing
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Optional
@@ -97,7 +99,11 @@ def _render(path: Path, state: EditState, max_size: int) -> tuple:
         if result["status"] == "ok":
             # Fingerprint of the exact history rendered: a repeated result with an old hash after an edit was
             # replayed by the client, not rendered here (nothing in this server caches renders).
-            info = {"rendered_via": "darktable-cli", "edit_hash": hashlib.sha1(xmp.read_bytes()).hexdigest()[:10]}
+            # The style is applied by darktable-cli, outside the XMP: its name and definition count too
+            style = state.style and _query_styles("SELECT i.* FROM style_items i JOIN styles s ON s.id = i.styleid"
+                                                  " WHERE s.name = ? ORDER BY i.num", state.style)
+            digest = hashlib.sha1(xmp.read_bytes() + repr((state.style, style)).encode()).hexdigest()[:10]
+            info = {"rendered_via": "darktable-cli", "edit_hash": digest}
             with PILImage.open(dst) as img:
                 return img.convert("RGB"), info | _darktable_notes(path, state)
     return ImageProcessor(path).process(state, preview_size=max_size), {
@@ -623,30 +629,40 @@ def local_contrast(
 
 
 @mcp.tool()
-def darktable_style(image_path: str, name: Optional[str] = None, remove: bool = False) -> dict:
-    """Apply one of the user's own darktable styles (built in the darktable GUI) on top of this server's edits.
+def darktable_style(image_path: str, name: Optional[str] = None, remove: bool = False,
+                    camera_styles: bool = False) -> dict:
+    """Apply one of the user's darktable styles (built in the darktable GUI) on top of this server's edits.
 
-    Without *name*: list the styles in the user's darktable data.db.  With *name*: previews and exports append
-    that style to the history, as darktable-cli --style does (the XMP sidecar keeps only this server's edits).
-    *remove*: stop applying it.  Use it to start from a base look the user made in the GUI.
+    Without *name*: list the user's own styles and darktable's examples (name -> description), plus darktable's
+    ~500 per-camera styles with *camera_styles*.  Names are shown without darktable's "_l10n_" markers; either
+    form is accepted.  With *name*: previews and exports append that style to the history, as darktable-cli
+    --style does (the XMP sidecar keeps only this server's edits).  *remove*: stop applying it.
     """
-    import sqlite3
-    from contextlib import closing
     try:
         path, state = _load_or_new(image_path)
     except FileNotFoundError as e:
         return {"error": str(e)}
-    db, styles = _user_config() / "data.db", {}
-    if db.exists():
-        with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as con:
-            styles = dict(con.execute("SELECT name, description FROM styles ORDER BY name").fetchall())
+    styles = {raw: (raw.replace("_l10n_", ""), desc) for raw, desc in
+              _query_styles("SELECT name, description FROM styles ORDER BY name")}
     if remove or name:
-        if name and name not in styles:
-            return {"error": f"No darktable style {name!r} in {db}", "styles": styles}
-        state.style = None if remove else name
+        raw = next((r for r, (shown, _) in styles.items() if name in (r, shown)), None)
+        if name and not raw:
+            return {"error": f"No darktable style {name!r} in {_user_config() / 'data.db'}; list them without a name"}
+        state.style = None if remove else raw
         state.save()
-        return {"status": "ok", "style": state.style} | _darktable_notes(path, state)
-    return {"styles": styles, "current": state.style, "data_db": str(db)}
+        return {"status": "ok", "style": name and styles[raw][0]} | _darktable_notes(path, state)
+    return {"styles": {shown: desc for raw, (shown, desc) in styles.items()
+                       if camera_styles or not raw.startswith("_l10n_darktable|_l10n_camera styles|")},
+            "current": state.style and state.style.replace("_l10n_", ""), "data_db": str(_user_config() / "data.db")}
+
+
+def _query_styles(sql: str, *args) -> list:
+    """Rows from the user's darktable data.db (styles live there), read-only; none if it does not exist."""
+    db = _user_config() / "data.db"
+    if not db.exists():
+        return []
+    with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as con:
+        return con.execute(sql, args).fetchall()
 
 
 _MASK_DOC = """

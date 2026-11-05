@@ -290,8 +290,18 @@ def test_darktable_style_is_applied(raw, tmp_path, monkeypatch):
         sid = con.execute("INSERT INTO styles (name, description) VALUES ('mono', 'test')").lastrowid
         con.execute("INSERT INTO style_items VALUES (?, 0, 5, 'colorbalancergb', ?, 1, ?, 14, 0, 'mono', 1)",
                     (sid, xmp_writer._color_balance(-100, 0, 0), blend))
-    assert server.darktable_style(raw)["styles"]["mono"] == "test"
+    shown = server.darktable_style(raw)["styles"]
+    assert shown["mono"] == "test" and not any("_l10n_" in n or "camera styles" in n for n in shown)
+    assert "darktable|examples|colors|autumn" in shown
+    assert len(server.darktable_style(raw, camera_styles=True)["styles"]) > len(shown) + 400
     assert "error" in server.darktable_style(raw, "nope")
+    edit_hash = lambda: json.loads(server.get_image_preview(raw, max_size=100)[0].split("\n", 1)[1])["edit_hash"]
+    hashes = [edit_hash()]
+    for style in ("_l10n_darktable|_l10n_examples|_l10n_colors|_l10n_autumn", "darktable|examples|colors|faded"):
+        assert server.darktable_style(raw, style)["status"] == "ok"
+        hashes.append(edit_hash())
+    assert len(set(hashes)) == 3
+    server.darktable_style(raw, remove=True)
     def saturation(name):
         r = server.export_image(raw, output_directory=str(tmp_path / name), max_dimension=300)
         return np.asarray(Image.open(r["output_path"]).convert("HSV"), float)[..., 1].mean()
