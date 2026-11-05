@@ -252,3 +252,21 @@ def test_local_contrast_detail_sets_texture(raw, tmp_path):
     strong = texture("c")
     server.local_contrast(raw, detail=60)
     assert texture("d") < base < default < strong
+
+
+def test_renders_follow_edits_after_export(raw, tmp_path):
+    # the user's sequence: export (writes the sidecar darktable-cli also imports), edit, re-render at the same size
+    mid = server.add_masked_adjustment(raw, {"exposure_ev": 1}, {"gradient": {"compression": 3}})["id"]
+    def renders():
+        text, img = server.compare_images(raw, raw, max_size=300)
+        preview = server.get_image_preview(raw, max_size=300)
+        return (json.loads(text)["a"]["edit_hash"], json.loads(preview[0].split("\n", 1)[1])["edit_hash"],
+                np.asarray(Image.open(io.BytesIO(img.data)).convert("L"), float).mean(),
+                np.asarray(Image.open(io.BytesIO(preview[1].data)).convert("L"), float).mean(),
+                server.get_histogram(raw)["luminance"])
+    before = renders()
+    server.export_image(raw, output_directory=str(tmp_path))
+    server.update_masked_adjustment(raw, mid, {"exposure_ev": -2})
+    after = renders()
+    assert before[0] == before[1] != after[0] == after[1]
+    assert after[2] < before[2] - 20 and after[3] < before[3] - 20 and after[4] != before[4]

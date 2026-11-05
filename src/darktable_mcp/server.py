@@ -1,6 +1,7 @@
 """Darktable MCP Server — photo editing tools for Claude."""
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -91,10 +92,14 @@ def _render(path: Path, state: EditState, max_size: int) -> tuple:
     from PIL import Image as PILImage
     with tempfile.TemporaryDirectory() as tmp:
         dst = Path(tmp, "preview.jpg")
-        result = _export_via_darktable_cli(path, dst, _render_xmp(path, state, tmp, False), 90, max_size)
+        xmp = _render_xmp(path, state, tmp, False)
+        result = _export_via_darktable_cli(path, dst, xmp, 90, max_size)
         if result["status"] == "ok":
+            # Fingerprint of the exact history rendered: a repeated result with an old hash after an edit was
+            # replayed by the client, not rendered here (nothing in this server caches renders).
+            info = {"rendered_via": "darktable-cli", "edit_hash": hashlib.sha1(xmp.read_bytes()).hexdigest()[:10]}
             with PILImage.open(dst) as img:
-                return img.convert("RGB"), {"rendered_via": "darktable-cli"} | _darktable_notes(path, state)
+                return img.convert("RGB"), info | _darktable_notes(path, state)
     return ImageProcessor(path).process(state, preview_size=max_size), {
         "rendered_via": "rawpy", "darktable_cli_failure": {k: v for k, v in result.items() if k != "status"},
         "warning": "darktable-cli could not render this RAW, so this is an approximation with rawpy: "
